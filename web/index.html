@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Commesse Live</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2<family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">CL</div>
+          <div>
+            <div class="title">Commesse Live</div>
+            <div class="subtitle">Database commesse in tempo reale</div>
+          </div>
+        </div>
+        <div class="auth">
+          <div id="authStatus" class="auth-status">Non autenticato</div>
+          <div class="auth-actions">
+            <input id="emailInput" type="email" placeholder="email@azienda.it" />
+            <button id="loginBtn" class="primary">Invia link</button>
+            <button id="logoutBtn" class="ghost hidden">Esci</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="status-bar">
+        <div id="roleBadge" class="badge hidden">Ruolo</div>
+        <div id="statusMsg" class="status-msg">Inserisci le credenziali Supabase.</div>
+      </section>
+
+      <main class="layout">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Commesse</h2>
+            <div class="filters">
+              <input id="searchInput" type="text" placeholder="Cerca codice, titolo, cliente" />
+              <select id="yearFilter">
+                <option value="">Tutti gli anni</option>
+              </select>
+              <select id="statusFilter">
+                <option value="">Tutti gli stati</option>
+                <option value="nuova">Nuova</option>
+                <option value="in_corso">In corso</option>
+                <option value="chiusa">Chiusa</option>
+                <option value="sospesa">Sospesa</option>
+              </select>
+              <button id="openImportBtn" class="ghost" type="button">Importa Excel</button>
+            </div>
+          </div>
+          <div id="commesseList" class="list"></div>
+        </section>
+
+        <section class="panel detail">
+          <div class="panel-header">
+            <h2>Dettaglio commessa</h2>
+            <div id="selectedCode" class="mono">Nessuna selezionata</div>
+          </div>
+
+          <form id="detailForm" class="form">
+            <div class="grid">
+              <label>
+                Codice
+                <input id="d_codice" type="text" placeholder="2026_001" />
+              </label>
+              <label>
+                Titolo
+                <input id="d_titolo" type="text" placeholder="Descrizione breve" />
+              </label>
+              <label>
+                Cliente
+                <input id="d_cliente" type="text" placeholder="Cliente" />
+              </label>
+              <label>
+                Stato
+                <select id="d_stato">
+                  <option value="nuova">Nuova</option>
+                  <option value="in_corso">In corso</option>
+                  <option value="chiusa">Chiusa</option>
+                  <option value="sospesa">Sospesa</option>
+                </select>
+              </label>
+              <label>
+                Priorita
+                <select id="d_priorita">
+                  <option value="">-</option>
+                  <option value="bassa">Bassa</option>
+                  <option value="media">Media</option>
+                  <option value="alta">Alta</option>
+                  <option value="critica">Critica</option>
+                </select>
+              </label>
+              <label>
+                Data ingresso
+                <input id="d_data_ingresso" type="date" />
+              </label>
+              <label>
+                Consegna prevista
+                <input id="d_data_consegna" type="date" />
+              </label>
+            </div>
+            <label>
+              Note generali
+              <textarea id="d_note" rows="3"></textarea>
+            </label>
+            <div class="actions">
+              <button id="updateBtn" class="primary" type="submit">Salva modifiche</button>
+              <button id="clearSelectionBtn" class="ghost" type="button">Deseleziona</button>
+            </div>
+          </form>
+
+          <div class="section">
+            <h3>Reparti</h3>
+            <div id="repartiList" class="reparti"></div>
+            <form id="addRepartoForm" class="inline-form">
+              <select id="addRepartoSelect"></select>
+              <button id="addRepartoBtn" class="ghost" type="submit">Aggiungi reparto</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel create">
+          <div class="panel-header">
+            <h2>Nuova commessa</h2>
+          </div>
+          <form id="newForm" class="form">
+            <label>
+              Codice
+              <input id="n_codice" type="text" placeholder="2026_001" required />
+            </label>
+            <label>
+              Titolo
+              <input id="n_titolo" type="text" placeholder="Titolo" />
+            </label>
+            <label>
+              Cliente
+              <input id="n_cliente" type="text" placeholder="Cliente" />
+            </label>
+            <label>
+              Stato
+              <select id="n_stato">
+                <option value="nuova">Nuova</option>
+                <option value="in_corso">In corso</option>
+                <option value="chiusa">Chiusa</option>
+                <option value="sospesa">Sospesa</option>
+              </select>
+            </label>
+            <label>
+              Priorita
+              <select id="n_priorita">
+                <option value="">-</option>
+                <option value="bassa">Bassa</option>
+                <option value="media">Media</option>
+                <option value="alta">Alta</option>
+                <option value="critica">Critica</option>
+              </select>
+            </label>
+            <label>
+              Data ingresso
+              <input id="n_data_ingresso" type="date" />
+            </label>
+            <label>
+              Consegna prevista
+              <input id="n_data_consegna" type="date" />
+            </label>
+            <label>
+              Note generali
+              <textarea id="n_note" rows="3"></textarea>
+            </label>
+            <div class="section">
+              <h3>Reparti coinvolti</h3>
+              <div id="newRepartiChecks" class="checks"></div>
+            </div>
+            <div class="actions">
+              <button id="createBtn" class="primary" type="submit">Crea commessa</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel calendar-panel">
+          <div class="panel-header">
+            <h2>Calendario attivita</h2>
+            <div class="calendar-controls">
+              <button id="calPrevBtn" class="ghost" type="button"></button>
+              <input id="calendarDate" type="date" />
+              <button id="calNextBtn" class="ghost" type="button"></button>
+              <select id="calendarView">
+                <option value="week">Settimana</option>
+                <option value="day">Giorno</option>
+              </select>
+            </div>
+          </div>
+          <div id="calendarGrid" class="calendar-grid"></div>
+        </section>
+
+        <section class="panel matrix-panel">
+          <div class="panel-header">
+            <h2>Matrice risorse</h2>
+            <div class="matrix-controls">
+              <label class="matrix-switch">
+                <span>Shift automatico</span>
+                <input id="matrixShiftToggle" type="checkbox" />
+                <span class="matrix-switch-slider"></span>
+              </label>
+              <button id="matrixPrevBtn" class="ghost matrix-icon-btn" type="button">◀</button>
+              <div class="matrix-control">
+                <input id="matrixDate" type="date" />
+              </div>
+              <button id="matrixNextBtn" class="ghost matrix-icon-btn" type="button">▶</button>
+              <div class="matrix-control">
+                <button id="matrixTodayBtn" class="ghost matrix-flat-btn" type="button">Oggi</button>
+              </div>
+              <div class="matrix-control">
+                <button id="matrixZoomInBtn" class="ghost matrix-flat-btn" type="button">Zoom in</button>
+              </div>
+              <div class="matrix-control">
+                <button id="matrixZoomOutBtn" class="ghost matrix-flat-btn" type="button">Zoom out</button>
+              </div>
+              <div class="matrix-control">
+                <button id="matrixToggleListBtn" class="ghost matrix-flat-btn" type="button">Comprimi lista</button>
+              </div>
+              <div class="matrix-control">
+                <select id="matrixCommessa" class="hidden"></select>
+                <div id="matrixCommessaPicker" class="matrix-attivita-picker matrix-commessa-picker">
+                  <div class="matrix-attivita-field">
+                    <button id="matrixCommessaPickerToggleBtn" class="ghost matrix-flat-btn" type="button">
+                      Filtra commesse
+                    </button>
+                  </div>
+                  <div id="matrixCommessaPickerList" class="matrix-attivita-list hidden"></div>
+                </div>
+              </div>
+              <div class="matrix-control">
+                <select id="matrixAttivita" class="hidden">
+                  <option value="">Attivita</option>
+                  <option value="3D">3D</option>
+                <option value="Telaio">Telaio</option>
+                <option value="Costruttivi 1-5">Costruttivi 1-5</option>
+                <option value="Carenatura">Carenatura</option>
+                <option value="Preliminare">Preliminare</option>
+                <option value="Consegna totale">Consegna totale</option>
+                <option value="ASSENTE">ASSENTE</option>
+                <option value="Altro">Altro</option>
+              </select>
+                <div id="matrixAttivitaPicker" class="matrix-attivita-picker">
+                  <div class="matrix-attivita-field">
+                    <button id="matrixAttivitaToggleBtn" class="ghost matrix-flat-btn" type="button">
+                      Filtra attivita
+                    </button>
+                  </div>
+                  <div id="matrixAttivitaList" class="matrix-attivita-list hidden"></div>
+                </div>
+              </div>
+              <div class="matrix-control">
+                <div class="matrix-extra">
+                  <button id="matrixColorByActivityBtn" class="ghost matrix-flat-btn" type="button">
+                    Colora per attivita
+                  </button>
+                  <button id="matrixColorByCommessaBtn" class="ghost matrix-flat-btn" type="button">
+                    Colora per commessa
+                  </button>
+                </div>
+                <span class="matrix-control-label">Colori</span>
+              </div>
+            </div>
+          </div>
+          <div id="matrixWrap" class="matrix-wrap">
+            <div id="matrixCommessePanel" class="matrix-commesse">
+              <div class="matrix-commesse-header">
+                <span>Commesse</span>
+                <input id="matrixCommessaSearch" type="text" placeholder="Cerca..." />
+              </div>
+              <div id="matrixCommesseList" class="matrix-commesse-list"></div>
+              <div class="matrix-commesse-footer">
+                <div id="matrixAssenzaItem" class="matrix-assenza-item" draggable="true">Assenza</div>
+              </div>
+            </div>
+            <div id="matrixGrid" class="matrix-grid"></div>
+          </div>
+        </section>
+
+        <section class="panel report-panel">
+          <div class="panel-header">
+            <h2>Reportistica</h2>
+            <div class="report-controls">
+              <button id="matrixReportSortBtn" class="ghost" type="button">Ordine: Crescente</button>
+              <div id="matrixReportRange" class="mono"></div>
+            </div>
+          </div>
+          <div id="matrixReportGrid" class="report-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="importModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Importa da Excel</h3>
+          <button id="closeImportBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <p class="modal-hint">
+          Incolla righe tab-separate da Excel. Formato richiesto:
+          <span class="mono">anno + numero + descrizione</span>.
+        </p>
+        <textarea id="importTextarea" rows="10" placeholder="2025	418	Descrizione commessa"></textarea>
+        <div id="importPreview" class="modal-preview">Nessun dato incollato.</div>
+        <div class="modal-actions">
+          <button id="importCommitBtn" class="primary" type="button">Importa</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="assignModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Seleziona attivita</h3>
+          <button id="closeAssignBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <p class="modal-hint">
+          Seleziona una o piu attivita da assegnare alla commessa trascinata.
+        </p>
+        <div id="assignActivities" class="checks"></div>
+        <div id="assignAssenzaWrap" class="hidden">
+          <div class="modal-hint">Ore assenza</div>
+          <div class="quick-buttons">
+            <button id="assignAssenzaFullBtn" class="ghost" type="button">Giornata intera</button>
+            <button id="assignAssenzaHalfBtn" class="ghost" type="button">Mezza giornata</button>
+          </div>
+          <input id="assignAssenzaOre" type="number" min="0" step="0.5" placeholder="Tot ore" />
+        </div>
+        <label id="assignAltroNoteWrap" class="hidden">
+          Note (solo per Altro)
+          <input id="assignAltroNote" type="text" placeholder="Scrivi una nota..." />
+        </label>
+        <div class="modal-actions">
+          <button id="assignConfirmBtn" class="primary" type="button">Assegna</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="matrixFilterModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="matrixFilterTitle">Filtra</h3>
+          <button id="matrixFilterCloseBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <div class="modal-actions modal-actions-top">
+          <button id="matrixFilterResetBtn" class="ghost" type="button">Reset filtri</button>
+          <button id="matrixFilterClearBtn" class="ghost" type="button">Svuota</button>
+          <button id="matrixFilterApplyBtn" class="primary" type="button">Applica</button>
+        </div>
+        <select id="matrixFilterYear" class="hidden">
+          <option value="">Tutti gli anni</option>
+        </select>
+        <input id="matrixFilterSearch" type="text" placeholder="Cerca..." />
+        <div id="matrixFilterList" class="checks"></div>
+      </div>
+    </div>
+
+    <div id="activityModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Gestisci attivita</h3>
+          <button id="activityCloseBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <div id="activityMeta" class="modal-hint"></div>
+        <div>
+          <div class="modal-hint">Attivita</div>
+          <div id="activityTitleList" class="checks"></div>
+        </div>
+        <div id="activityAssenzaWrap" class="hidden">
+          <div class="modal-hint">Ore assenza</div>
+          <div class="quick-buttons">
+            <button id="activityAssenzaFullBtn" class="ghost" type="button">Giornata intera</button>
+            <button id="activityAssenzaHalfBtn" class="ghost" type="button">Mezza giornata</button>
+          </div>
+          <input id="activityAssenzaOre" type="number" min="0" step="0.5" placeholder="Tot ore" />
+        </div>
+        <label id="activityAltroNoteWrap" class="hidden">
+          Note (solo per Altro)
+          <input id="activityAltroNote" type="text" placeholder="Scrivi una nota..." />
+        </label>
+        <label>
+          Durata (giorni)
+          <input id="activityDurationInput" type="number" min="1" step="1" />
+        </label>
+        <div class="modal-actions">
+          <button id="activityDeleteBtn" class="danger" type="button">Elimina attivita</button>
+          <button id="activitySaveBtn" class="primary" type="button">Salva durata</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
