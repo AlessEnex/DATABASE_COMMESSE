@@ -41,6 +41,26 @@ body {
   box-shadow: 0 12px 30px rgba(16, 28, 43, 0.08);
 }
 
+.topbar-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.topbar-actions .status-msg {
+  max-width: 360px;
+  text-align: right;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -83,9 +103,39 @@ body {
   justify-content: flex-end;
 }
 
+.auth-actions.is-authenticated #emailInput,
+.auth-actions.is-authenticated #loginBtn {
+  display: none;
+}
+
+.auth-actions .link-btn {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  color: var(--primary);
+}
+
+.auth-actions .link-btn:hover {
+  text-decoration: underline;
+}
+
 .auth-status {
   font-size: 13px;
   color: var(--muted);
+}
+
+.auth-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4bb3ff;
+  box-shadow: 0 0 0 2px rgba(75, 179, 255, 0.2);
 }
 
 .status-bar {
@@ -131,8 +181,33 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 1.1fr 1.4fr 1fr;
+  grid-template-columns: 1.4fr 1.2fr 1fr;
   gap: 16px;
+  margin-top: 8px;
+  min-height: calc(100vh - 140px);
+  align-items: stretch;
+}
+
+#commessePanel {
+  grid-column: 1 / -1;
+  height: calc(100vh - 140px);
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+
+#commessePanel.collapsed {
+  height: auto;
+}
+
+#commessePanel .panel-body {
+  flex: 1;
+  min-height: 0;
+}
+
+#commessePanel .list {
+  flex: 1;
+  max-height: none;
 }
 
 .panel {
@@ -146,10 +221,65 @@ body {
 
 .panel-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.panel-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 0;
+}
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: rgba(34, 74, 122, 0.08);
+  color: var(--primary);
+}
+
+.icon-btn#commesseToggleBtn {
+  font-size: 16px;
+  transition: transform 0.15s ease;
+}
+
+.icon-btn:hover {
+  background: rgba(34, 74, 122, 0.14);
+}
+
+.panel.collapsed #commesseToggleBtn {
+  transform: rotate(-90deg);
+}
+
+.panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel.collapsed .panel-body {
+  display: none;
+}
+
+.panel.collapsed {
+  min-height: auto;
 }
 
 .panel h2 {
@@ -403,6 +533,12 @@ button {
   min-height: 160px;
 }
 
+.calendar-day.calendar-today {
+  border-color: #f0c84b;
+  background: #fff8df;
+  box-shadow: inset 0 0 0 1px rgba(240, 200, 75, 0.35);
+}
+
 .calendar-day h4 {
   margin: 0;
   font-size: 13px;
@@ -417,6 +553,31 @@ button {
   background: #f2f6ff;
   font-size: 12px;
   cursor: pointer;
+}
+
+.calendar-card.calendar-cad {
+  background: #e9f6ef;
+  border-color: #7cc59a;
+  color: #1f4f2b;
+}
+
+.calendar-card.calendar-termo {
+  background: #e9f1fb;
+  border-color: #7aa4dc;
+  color: #1f3d6a;
+}
+
+.calendar-card.calendar-elett {
+  background: #fff4d6;
+  border-color: #f0c84b;
+  color: #5a3f07;
+}
+
+.calendar-card.calendar-cad .calendar-meta,
+.calendar-card.calendar-termo .calendar-meta,
+.calendar-card.calendar-elett .calendar-meta {
+  color: inherit;
+  opacity: 0.75;
 }
 
 .calendar-card strong {
@@ -972,6 +1133,12 @@ button {
   cursor: grab;
 }
 
+.matrix-altro-item {
+  border-style: solid;
+  background: #f5f1ff;
+  margin-top: 8px;
+}
+
 .matrix-assenza-item:active {
   cursor: grabbing;
 }
@@ -1213,7 +1380,15 @@ button {
 }
 
 .matrix-activity-bar.is-done {
-  opacity: 0.55;
+  background: #2fbf71;
+  border-color: #1f8f53;
+  color: #ffffff;
+}
+
+.matrix-activity-bar.is-done .commessa-year,
+.matrix-activity-bar.is-done .activity-title,
+.matrix-activity-bar.is-done .commessa-num {
+  color: #ffffff;
 }
 
 .matrix-activity-bar.is-done::after {
@@ -1223,7 +1398,7 @@ button {
   right: 6px;
   font-size: 12px;
   font-weight: 700;
-  color: #2f6f3d;
+  color: #ffffff;
 }
 
 .matrix-quick-menu {

@@ -21,28 +21,56 @@
             <div class="subtitle">Database commesse in tempo reale</div>
           </div>
         </div>
-        <div class="auth">
-          <div id="authStatus" class="auth-status">Non autenticato</div>
-          <div class="auth-actions">
-            <input id="emailInput" type="email" placeholder="email@azienda.it" />
-            <button id="loginBtn" class="primary">Invia link</button>
-            <button id="logoutBtn" class="ghost hidden">Esci</button>
+        <div class="topbar-right">
+          <div class="topbar-actions">
+            <div id="statusMsg" class="status-msg"></div>
+          </div>
+          <div class="auth">
+            <div class="auth-status-line">
+              <span id="authDot" class="auth-dot hidden"></span>
+              <span id="authStatus" class="auth-status">Non autenticato</span>
+              <div id="roleBadge" class="badge hidden">Ruolo</div>
+              <button id="openResourcesBtn" class="ghost" type="button">Gestisci risorse</button>
+              <button id="logoutBtn" class="ghost hidden link-btn">Log out</button>
+            </div>
+            <div id="authActions" class="auth-actions">
+              <input id="emailInput" type="email" placeholder="email@azienda.it" />
+              <button id="loginBtn" class="primary">Invia link</button>
+            </div>
           </div>
         </div>
       </header>
 
-      <section class="status-bar">
-        <div id="roleBadge" class="badge hidden">Ruolo</div>
-        <div id="statusMsg" class="status-msg">Inserisci le credenziali Supabase.</div>
-        <div class="status-actions">
-          <button id="openResourcesBtn" class="ghost" type="button">Gestisci risorse</button>
-        </div>
-      </section>
+      <section class="status-bar hidden"></section>
 
       <main class="layout">
-        <section class="panel">
+        <section id="commessePanel" class="panel collapsed">
           <div class="panel-header">
-            <h2>Commesse</h2>
+            <div class="panel-header-left">
+              <h2>Commesse</h2>
+              <div class="panel-actions">
+              <button
+                id="openNewCommessaBtn"
+                class="ghost icon-btn"
+                type="button"
+                title="Nuova commessa"
+                aria-label="Nuova commessa"
+              >
+                +
+              </button>
+              <button
+                id="commesseToggleBtn"
+                class="ghost icon-btn"
+                type="button"
+                title="Comprimi o espandi"
+                aria-label="Comprimi o espandi"
+              >
+                ▾
+              </button>
+              </div>
+            </div>
+          </div>
+          <div id="commessePanelBody" class="panel-body">
             <div class="filters">
               <input id="searchInput" type="text" placeholder="Cerca codice, titolo, cliente" />
               <select id="yearFilter">
@@ -57,152 +85,11 @@
               </select>
               <button id="openImportBtn" class="ghost" type="button">Importa Excel</button>
             </div>
-          </div>
-          <div id="commesseList" class="list"></div>
-        </section>
-
-        <section class="panel detail">
-          <div class="panel-header">
-            <h2>Dettaglio commessa</h2>
-            <div id="selectedCode" class="mono">Nessuna selezionata</div>
-          </div>
-
-          <form id="detailForm" class="form">
-            <div class="grid">
-              <label>
-                Codice
-                <input id="d_codice" type="text" placeholder="2026_001" />
-              </label>
-              <label>
-                Titolo
-                <input id="d_titolo" type="text" placeholder="Descrizione breve" />
-              </label>
-              <label>
-                Cliente
-                <input id="d_cliente" type="text" placeholder="Cliente" />
-              </label>
-              <label>
-                Stato
-                <select id="d_stato">
-                  <option value="nuova">Nuova</option>
-                  <option value="in_corso">In corso</option>
-                  <option value="chiusa">Chiusa</option>
-                  <option value="sospesa">Sospesa</option>
-                </select>
-              </label>
-              <label>
-                Priorita
-                <select id="d_priorita">
-                  <option value="">-</option>
-                  <option value="bassa">Bassa</option>
-                  <option value="media">Media</option>
-                  <option value="alta">Alta</option>
-                  <option value="critica">Critica</option>
-                </select>
-              </label>
-              <label>
-                Data ingresso
-                <input id="d_data_ingresso" type="date" />
-              </label>
-              <label>
-                Consegna prevista
-                <input id="d_data_consegna" type="date" />
-              </label>
-            </div>
-            <label>
-              Note generali
-              <textarea id="d_note" rows="3"></textarea>
-            </label>
-            <div class="actions">
-              <button id="updateBtn" class="primary" type="submit">Salva modifiche</button>
-              <button id="clearSelectionBtn" class="ghost" type="button">Deseleziona</button>
-            </div>
-          </form>
-
-          <div class="section">
-            <h3>Reparti</h3>
-            <div id="repartiList" class="reparti"></div>
-            <form id="addRepartoForm" class="inline-form">
-              <select id="addRepartoSelect"></select>
-              <button id="addRepartoBtn" class="ghost" type="submit">Aggiungi reparto</button>
-            </form>
+            <div id="commesseList" class="list"></div>
           </div>
         </section>
 
-        <section class="panel create">
-          <div class="panel-header">
-            <h2>Nuova commessa</h2>
-          </div>
-          <form id="newForm" class="form">
-            <label>
-              Codice
-              <input id="n_codice" type="text" placeholder="2026_001" required />
-            </label>
-            <label>
-              Titolo
-              <input id="n_titolo" type="text" placeholder="Titolo" />
-            </label>
-            <label>
-              Cliente
-              <input id="n_cliente" type="text" placeholder="Cliente" />
-            </label>
-            <label>
-              Stato
-              <select id="n_stato">
-                <option value="nuova">Nuova</option>
-                <option value="in_corso">In corso</option>
-                <option value="chiusa">Chiusa</option>
-                <option value="sospesa">Sospesa</option>
-              </select>
-            </label>
-            <label>
-              Priorita
-              <select id="n_priorita">
-                <option value="">-</option>
-                <option value="bassa">Bassa</option>
-                <option value="media">Media</option>
-                <option value="alta">Alta</option>
-                <option value="critica">Critica</option>
-              </select>
-            </label>
-            <label>
-              Data ingresso
-              <input id="n_data_ingresso" type="date" />
-            </label>
-            <label>
-              Consegna prevista
-              <input id="n_data_consegna" type="date" />
-            </label>
-            <label>
-              Note generali
-              <textarea id="n_note" rows="3"></textarea>
-            </label>
-            <div class="section">
-              <h3>Reparti coinvolti</h3>
-              <div id="newRepartiChecks" class="checks"></div>
-            </div>
-            <div class="actions">
-              <button id="createBtn" class="primary" type="submit">Crea commessa</button>
-            </div>
-          </form>
-        </section>
 
-
-        <section class="panel calendar-panel">
-          <div class="panel-header">
-            <h2>Calendario attivita</h2>
-            <div class="calendar-controls">
-              <button id="calPrevBtn" class="ghost" type="button"></button>
-              <input id="calendarDate" type="date" />
-              <button id="calNextBtn" class="ghost" type="button"></button>
-              <select id="calendarView">
-                <option value="week">Settimana</option>
-                <option value="day">Giorno</option>
-              </select>
-            </div>
-          </div>
-          <div id="calendarGrid" class="calendar-grid"></div>
-        </section>
 
         <section class="panel matrix-panel">
           <div class="panel-header">
@@ -222,10 +109,14 @@
                 <button id="matrixTodayBtn" class="ghost matrix-flat-btn" type="button">Oggi</button>
               </div>
               <div class="matrix-control">
-                <button id="matrixZoomInBtn" class="ghost matrix-flat-btn" type="button">Zoom in</button>
+                <button id="matrixZoomInBtn" class="ghost matrix-flat-btn matrix-icon-btn" type="button" aria-label="Zoom in">
+                  +
+                </button>
               </div>
               <div class="matrix-control">
-                <button id="matrixZoomOutBtn" class="ghost matrix-flat-btn" type="button">Zoom out</button>
+                <button id="matrixZoomOutBtn" class="ghost matrix-flat-btn matrix-icon-btn" type="button" aria-label="Zoom out">
+                  −
+                </button>
               </div>
               <div class="matrix-control">
                 <button id="matrixToggleListBtn" class="ghost matrix-flat-btn" type="button">Comprimi lista</button>
@@ -287,10 +178,29 @@
               <div id="matrixCommesseList" class="matrix-commesse-list"></div>
               <div class="matrix-commesse-footer">
                 <div id="matrixAssenzaItem" class="matrix-assenza-item" draggable="true">Assenza</div>
+                <div id="matrixAltroItem" class="matrix-assenza-item matrix-altro-item" draggable="true">
+                  Altre attivita
+                </div>
               </div>
             </div>
             <div id="matrixGrid" class="matrix-grid"></div>
           </div>
+        </section>
+
+        <section class="panel calendar-panel">
+          <div class="panel-header">
+            <h2>Calendario attivita</h2>
+            <div class="calendar-controls">
+              <button id="calPrevBtn" class="ghost" type="button"></button>
+              <input id="calendarDate" type="date" />
+              <button id="calNextBtn" class="ghost" type="button"></button>
+              <select id="calendarView">
+                <option value="week">Settimana</option>
+                <option value="day">Giorno</option>
+              </select>
+            </div>
+          </div>
+          <div id="calendarGrid" class="calendar-grid"></div>
         </section>
 
         <section class="panel report-panel">
@@ -322,6 +232,132 @@
         <div class="modal-actions">
           <button id="importCommitBtn" class="primary" type="button">Importa</button>
         </div>
+      </div>
+    </div>
+
+    <div id="commessaDetailModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Dettaglio commessa</h3>
+          <button id="closeDetailBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <div id="selectedCode" class="mono">Nessuna selezionata</div>
+        <form id="detailForm" class="form">
+          <div class="grid">
+            <label>
+              Codice
+              <input id="d_codice" type="text" placeholder="2026_001" />
+            </label>
+            <label>
+              Titolo
+              <input id="d_titolo" type="text" placeholder="Descrizione breve" />
+            </label>
+            <label>
+              Cliente
+              <input id="d_cliente" type="text" placeholder="Cliente" />
+            </label>
+            <label>
+              Stato
+              <select id="d_stato">
+                <option value="nuova">Nuova</option>
+                <option value="in_corso">In corso</option>
+                <option value="chiusa">Chiusa</option>
+                <option value="sospesa">Sospesa</option>
+              </select>
+            </label>
+            <label>
+              Priorita
+              <select id="d_priorita">
+                <option value="">-</option>
+                <option value="bassa">Bassa</option>
+                <option value="media">Media</option>
+                <option value="alta">Alta</option>
+                <option value="critica">Critica</option>
+              </select>
+            </label>
+            <label>
+              Data ingresso
+              <input id="d_data_ingresso" type="date" />
+            </label>
+            <label>
+              Consegna prevista
+              <input id="d_data_consegna" type="date" />
+            </label>
+          </div>
+          <label>
+            Note generali
+            <textarea id="d_note" rows="3"></textarea>
+          </label>
+          <div class="actions">
+            <button id="updateBtn" class="primary" type="submit">Salva modifiche</button>
+            <button id="clearSelectionBtn" class="ghost" type="button">Deseleziona</button>
+          </div>
+        </form>
+        <div class="section">
+          <h3>Reparti</h3>
+          <div id="repartiList" class="reparti"></div>
+          <form id="addRepartoForm" class="inline-form">
+            <select id="addRepartoSelect"></select>
+            <button id="addRepartoBtn" class="ghost" type="submit">Aggiungi reparto</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div id="commessaCreateModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Nuova commessa</h3>
+          <button id="closeCreateBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <form id="newForm" class="form">
+          <label>
+            Codice
+            <input id="n_codice" type="text" placeholder="2026_99" required />
+          </label>
+          <label>
+            Descrizione
+            <input id="n_titolo" type="text" placeholder="S4+3 Renkin ..." required />
+          </label>
+          <label>
+            Cliente
+            <input id="n_cliente" type="text" placeholder="Cliente" />
+          </label>
+          <label>
+            Stato
+            <select id="n_stato">
+              <option value="nuova">Nuova</option>
+              <option value="in_corso">In corso</option>
+              <option value="chiusa">Chiusa</option>
+              <option value="sospesa">Sospesa</option>
+            </select>
+          </label>
+          <label>
+            Priorita
+            <select id="n_priorita">
+              <option value="">-</option>
+              <option value="bassa">Bassa</option>
+              <option value="media">Media</option>
+              <option value="alta">Alta</option>
+              <option value="critica">Critica</option>
+            </select>
+          </label>
+          <label>
+            Data ingresso
+            <input id="n_data_ingresso" type="date" />
+          </label>
+          <label>
+            Consegna prevista
+            <input id="n_data_consegna" type="date" />
+          </label>
+          <label>
+            Note generali
+            <textarea id="n_note" rows="3"></textarea>
+          </label>
+          <div class="actions">
+            <button id="createBtn" class="primary" type="submit">Crea commessa</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -402,6 +438,20 @@
         <div class="modal-actions">
           <button id="activityDeleteBtn" class="danger" type="button">Elimina attivita</button>
           <button id="activitySaveBtn" class="primary" type="button">Salva durata</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirmModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Conferma</h3>
+          <button id="confirmCloseBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <div id="confirmMessage" class="modal-hint"></div>
+        <div class="modal-actions">
+          <button id="confirmCancelBtn" class="ghost" type="button">Annulla</button>
+          <button id="confirmOkBtn" class="danger" type="button">Elimina</button>
         </div>
       </div>
     </div>

@@ -27,20 +27,30 @@ const statusMsg = el("statusMsg");
 const emailInput = el("emailInput");
 const loginBtn = el("loginBtn");
 const logoutBtn = el("logoutBtn");
+const authActions = el("authActions");
+const authDot = el("authDot");
 
 const commesseList = el("commesseList");
 const searchInput = el("searchInput");
 const yearFilter = el("yearFilter");
 const statusFilter = el("statusFilter");
 const openImportBtn = el("openImportBtn");
+const commessePanel = el("commessePanel");
+const commessePanelBody = el("commessePanelBody");
+const commesseToggleBtn = el("commesseToggleBtn");
+const openNewCommessaBtn = el("openNewCommessaBtn");
 
 const detailForm = el("detailForm");
 const selectedCode = el("selectedCode");
 const updateBtn = el("updateBtn");
 const clearSelectionBtn = el("clearSelectionBtn");
+const commessaDetailModal = el("commessaDetailModal");
+const closeDetailBtn = el("closeDetailBtn");
 
 const newForm = el("newForm");
 const newRepartiChecks = el("newRepartiChecks");
+const commessaCreateModal = el("commessaCreateModal");
+const closeCreateBtn = el("closeCreateBtn");
 
 const repartiList = el("repartiList");
 const addRepartoForm = el("addRepartoForm");
@@ -100,6 +110,7 @@ const matrixCommessePanel = el("matrixCommessePanel");
 const matrixCommesseList = el("matrixCommesseList");
 const matrixCommessaSearch = el("matrixCommessaSearch");
 const matrixAssenzaItem = el("matrixAssenzaItem");
+const matrixAltroItem = el("matrixAltroItem");
 const matrixReportGrid = el("matrixReportGrid");
 const matrixReportRange = el("matrixReportRange");
 const matrixReportSortBtn = el("matrixReportSortBtn");
@@ -136,6 +147,11 @@ const activityAltroNote = el("activityAltroNote");
 const activityDurationInput = el("activityDurationInput");
 const activityDeleteBtn = el("activityDeleteBtn");
 const activitySaveBtn = el("activitySaveBtn");
+const confirmModal = el("confirmModal");
+const confirmMessage = el("confirmMessage");
+const confirmCloseBtn = el("confirmCloseBtn");
+const confirmCancelBtn = el("confirmCancelBtn");
+const confirmOkBtn = el("confirmOkBtn");
 
 const d = {
   codice: el("d_codice"),
@@ -170,7 +186,7 @@ const matrixState = {
   attivita: [],
   risorse: [],
   draggingId: null,
-  view: "week",
+  view: "two",
   pendingDrop: null,
   colorMode: "none",
   selectedAttivita: new Set(),
@@ -191,6 +207,7 @@ let commessaHighlightTimer = null;
 let commessaHighlightAt = 0;
 let commessaLongPressSuppress = false;
 let quickMenuAttivita = null;
+let confirmResolver = null;
 
 function applyCommessaHighlight(commessaId) {
   if (!matrixGrid) return;
@@ -636,7 +653,7 @@ async function saveActivityDuration() {
 async function deleteActivity() {
   const attivita = matrixState.editingAttivita;
   if (!attivita) return;
-  const ok = confirm("Eliminare questa attivita?");
+  const ok = await openConfirmModal("Eliminare questa attivita?");
   if (!ok) return;
   const { error } = await supabase.from("attivita").delete().eq("id", attivita.id);
   if (error) {
@@ -995,6 +1012,7 @@ function setWriteAccess(canWrite) {
   newForm.querySelector("button").disabled = disabled;
   importCommitBtn.disabled = disabled;
   openImportBtn.disabled = disabled;
+  if (openNewCommessaBtn) openNewCommessaBtn.disabled = disabled;
   if (matrixCommessa) matrixCommessa.disabled = disabled;
   if (matrixAttivita) matrixAttivita.disabled = disabled;
 }
@@ -1030,6 +1048,7 @@ function clearSelection() {
   selectedCode.textContent = "Nessuna selezionata";
   detailForm.reset();
   repartiList.innerHTML = "";
+  if (commessaDetailModal) commessaDetailModal.classList.add("hidden");
 }
 
 function formatDate(dateStr) {
@@ -1042,6 +1061,48 @@ function openImportModal() {
   importModal.classList.remove("hidden");
   importTextarea.focus();
   updateImportPreview();
+}
+
+function openCommessaCreateModal() {
+  if (!state.canWrite) return;
+  if (!commessaCreateModal) return;
+  commessaCreateModal.classList.remove("hidden");
+  if (newForm) newForm.reset();
+  const firstInput = commessaCreateModal.querySelector("input, textarea, select");
+  if (firstInput) firstInput.focus();
+}
+
+function closeCommessaCreateModal() {
+  if (!commessaCreateModal) return;
+  commessaCreateModal.classList.add("hidden");
+}
+
+function openCommessaDetailModal() {
+  if (!commessaDetailModal) return;
+  commessaDetailModal.classList.remove("hidden");
+}
+
+function closeCommessaDetailModal() {
+  if (!commessaDetailModal) return;
+  commessaDetailModal.classList.add("hidden");
+}
+
+function openConfirmModal(message) {
+  if (!confirmModal || !confirmMessage) return Promise.resolve(false);
+  confirmMessage.textContent = message;
+  confirmModal.classList.remove("hidden");
+  return new Promise((resolve) => {
+    confirmResolver = resolve;
+  });
+}
+
+function closeConfirmModal(result) {
+  if (!confirmModal) return;
+  confirmModal.classList.add("hidden");
+  if (confirmResolver) {
+    confirmResolver(Boolean(result));
+    confirmResolver = null;
+  }
 }
 
 function closeImportModal() {
@@ -1154,13 +1215,14 @@ function weekdayDates(start) {
 
 function weekDaysForView(baseDate, view) {
   const start = startOfWeek(baseDate);
+  if (view === "two") {
+    return [...weekdayDates(start), ...weekdayDates(addDays(start, 7))];
+  }
   if (view === "three") {
-    const prev = addDays(start, -7);
-    const next = addDays(start, 7);
     return [
-      ...weekdayDates(prev),
       ...weekdayDates(start),
-      ...weekdayDates(next),
+      ...weekdayDates(addDays(start, 7)),
+      ...weekdayDates(addDays(start, 14)),
     ];
   }
   if (view === "six") {
@@ -1698,6 +1760,45 @@ async function handleMatrixDropOnCell(cell, e) {
     await loadMatrixAttivita();
     return;
   }
+  const altroToken = e.dataTransfer.getData("application/x-altro");
+  if (altroToken) {
+    if (!isActivityAllowedForRisorsa("Altro", r.id)) {
+      setStatus("Questa attivita non e disponibile per questo reparto.", "error");
+      return;
+    }
+    const startAt = new Date(d);
+    startAt.setHours(8, 0, 0, 0);
+    const endAt = new Date(d);
+    endAt.setHours(17, 0, 0, 0);
+    if (matrixState.autoShift) {
+      const hasOverlap = matrixState.attivita.some((a) => a.risorsa_id === r.id && overlapsDay(a, d));
+      if (hasOverlap) {
+        const ok = await shiftRisorsa(r.id, d, 1);
+        if (!ok) return;
+      }
+    }
+    const { data, error } = await supabase
+      .from("attivita")
+      .insert({
+        commessa_id: null,
+        titolo: "Altro",
+        descrizione: null,
+        risorsa_id: r.id,
+        data_inizio: startAt.toISOString(),
+        data_fine: endAt.toISOString(),
+        stato: "pianificata",
+      })
+      .select("*")
+      .single();
+    if (error) {
+      setStatus(`Errore altra attivita: ${error.message}`, "error");
+      return;
+    }
+    setStatus("Attivita creata.", "ok");
+    openActivityModal(data);
+    await loadMatrixAttivita();
+    return;
+  }
   const commessaId = e.dataTransfer.getData("application/x-commessa-id");
   if (commessaId) {
     matrixState.pendingDrop = { commessaId, risorsaId: r.id, day: d };
@@ -1844,7 +1945,7 @@ function renderCommesse(list) {
         <span>Ingresso: ${formatDate(c.data_ingresso) || "-"}</span>
       </div>
     `;
-    item.addEventListener("click", () => selectCommessa(c.id));
+    item.addEventListener("click", () => selectCommessa(c.id, { openModal: true }));
     commesseList.appendChild(item);
   });
 }
@@ -1909,6 +2010,7 @@ function renderReparti(commessa) {
 }
 
 function renderRepartiChecks() {
+  if (!newRepartiChecks) return;
   newRepartiChecks.innerHTML = "";
   state.reparti.forEach((r) => {
     const wrapper = document.createElement("label");
@@ -2063,7 +2165,7 @@ function renderYearFilter() {
   }
 }
 
-function selectCommessa(id) {
+function selectCommessa(id, options = {}) {
   const commessa = state.commesse.find((c) => c.id === id);
   if (!commessa) return;
   state.selected = commessa;
@@ -2080,6 +2182,7 @@ function selectCommessa(id) {
 
   renderReparti(commessa);
   renderCommesse(state.commesse);
+  if (options.openModal) openCommessaDetailModal();
 }
 
 async function loadProfile() {
@@ -2098,6 +2201,8 @@ async function loadProfile() {
   setWriteAccess(data.ruolo !== "viewer");
   authStatus.textContent = `Connesso come ${data.email}`;
   logoutBtn.classList.remove("hidden");
+  if (authActions) authActions.classList.add("is-authenticated");
+  if (authDot) authDot.classList.remove("hidden");
 }
 
 async function loadReparti() {
@@ -2832,6 +2937,10 @@ function renderCalendar(start, end) {
   days.forEach((day) => {
     const col = document.createElement("div");
     col.className = "calendar-day";
+    const today = startOfDay(new Date());
+    if (startOfDay(day).getTime() === today.getTime()) {
+      col.classList.add("calendar-today");
+    }
     const label = day.toLocaleDateString("it-IT", {
       weekday: "short",
       day: "2-digit",
@@ -2860,6 +2969,10 @@ function renderCalendar(start, end) {
 
     const card = document.createElement("div");
     card.className = "calendar-card";
+    const deptKey = normalizeDeptKey(getRisorsaDeptName(a.risorsa_id));
+    if (deptKey === "CAD") card.classList.add("calendar-cad");
+    if (deptKey === "TERMODINAMICI") card.classList.add("calendar-termo");
+    if (deptKey === "ELETTRICI") card.classList.add("calendar-elett");
     card.innerHTML = `
       <strong>${a.titolo}</strong>
       <div class="calendar-meta">${formatTimeRange(a.data_inizio, a.data_fine)}</div>
@@ -2911,9 +3024,17 @@ async function handleUpdate(e) {
 
 async function handleCreate(e) {
   e.preventDefault();
+  if (!n.codice.value.trim()) {
+    setStatus("Il codice è obbligatorio.", "error");
+    return;
+  }
+  if (!n.titolo.value.trim()) {
+    setStatus("La descrizione è obbligatoria.", "error");
+    return;
+  }
   const payload = {
     codice: n.codice.value.trim(),
-    titolo: n.titolo.value.trim() || null,
+    titolo: n.titolo.value.trim(),
     cliente: n.cliente.value.trim() || null,
     stato: n.stato.value,
     priorita: n.priorita.value || null,
@@ -2926,24 +3047,11 @@ async function handleCreate(e) {
     setStatus(`Errore create: ${error.message}`, "error");
     return;
   }
-  const selectedReparti = Array.from(newRepartiChecks.querySelectorAll("input:checked")).map(
-    (i) => i.value
-  );
-  if (selectedReparti.length) {
-    const rows = selectedReparti.map((id) => ({
-      commessa_id: data.id,
-      reparto_id: Number(id),
-      stato: "da_fare",
-    }));
-    const { error: repErr } = await supabase.from("commesse_reparti").insert(rows);
-    if (repErr) {
-      setStatus(`Commessa creata, errore reparti: ${repErr.message}`, "error");
-    }
-  }
   newForm.reset();
   setStatus("Commessa creata.", "ok");
+  closeCommessaCreateModal();
   await loadCommesse();
-  selectCommessa(data.id);
+  selectCommessa(data.id, { openModal: true });
 }
 
 async function handleAddReparto(e) {
@@ -3067,7 +3175,7 @@ async function handleAssignConfirm() {
 
 async function init() {
   if (SUPABASE_URL.startsWith("INSERISCI")) {
-    setStatus("Configura SUPABASE_URL e SUPABASE_ANON_KEY in web/app.js.");
+    setStatus("");
   }
 
   closeImportModal();
@@ -3086,7 +3194,7 @@ async function init() {
     await loadMatrixAttivita();
     await setupRealtime();
   } else {
-    setStatus("Effettua il login con email whitelisted.");
+    setStatus("");
   }
 }
 
@@ -3097,6 +3205,32 @@ yearFilter.addEventListener("change", applyFilters);
 statusFilter.addEventListener("change", applyFilters);
 detailForm.addEventListener("submit", handleUpdate);
 newForm.addEventListener("submit", handleCreate);
+if (openNewCommessaBtn) {
+  openNewCommessaBtn.addEventListener("click", openCommessaCreateModal);
+}
+if (closeCreateBtn) {
+  closeCreateBtn.addEventListener("click", closeCommessaCreateModal);
+}
+if (commessaCreateModal) {
+  commessaCreateModal.addEventListener("click", (e) => {
+    if (e.target === commessaCreateModal) closeCommessaCreateModal();
+  });
+}
+if (closeDetailBtn) {
+  closeDetailBtn.addEventListener("click", closeCommessaDetailModal);
+}
+if (commessaDetailModal) {
+  commessaDetailModal.addEventListener("click", (e) => {
+    if (e.target === commessaDetailModal) closeCommessaDetailModal();
+  });
+}
+if (commesseToggleBtn && commessePanel) {
+  commesseToggleBtn.addEventListener("click", () => {
+    commessePanel.classList.toggle("collapsed");
+    const isCollapsed = commessePanel.classList.contains("collapsed");
+    commesseToggleBtn.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+  });
+}
 addRepartoForm.addEventListener("submit", handleAddReparto);
 if (openResourcesBtn) {
   openResourcesBtn.addEventListener("click", openResourcesModal);
@@ -3193,6 +3327,9 @@ window.addEventListener("keydown", (e) => {
     closeImportModal();
     closeAssignModal();
     closeMatrixQuickMenu();
+    closeCommessaCreateModal();
+    closeCommessaDetailModal();
+    closeConfirmModal(false);
   }
 });
 calendarView.addEventListener("change", async (e) => {
@@ -3220,13 +3357,27 @@ matrixDate.addEventListener("change", async (e) => {
   await loadMatrixAttivita();
 });
 matrixPrevBtn.addEventListener("click", async () => {
-  const step = matrixState.view === "six" ? 42 : matrixState.view === "three" ? 21 : 7;
+  const step =
+    matrixState.view === "six"
+      ? 42
+      : matrixState.view === "three"
+      ? 21
+      : matrixState.view === "two"
+      ? 14
+      : 7;
   matrixState.date = addDays(matrixState.date, -step);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
 });
 matrixNextBtn.addEventListener("click", async () => {
-  const step = matrixState.view === "six" ? 42 : matrixState.view === "three" ? 21 : 7;
+  const step =
+    matrixState.view === "six"
+      ? 42
+      : matrixState.view === "three"
+      ? 21
+      : matrixState.view === "two"
+      ? 14
+      : 7;
   matrixState.date = addDays(matrixState.date, step);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
@@ -3239,18 +3390,26 @@ matrixTodayBtn.addEventListener("click", async () => {
 matrixZoomInBtn.addEventListener("click", async () => {
   if (matrixState.view === "six") {
     matrixState.view = "three";
+  } else if (matrixState.view === "three") {
+    matrixState.view = "two";
+  } else if (matrixState.view === "two") {
+    matrixState.view = "week";
   } else {
     matrixState.view = "week";
   }
+  matrixState.date = startOfWeek(matrixState.date);
   setMatrixViewLabel();
   await loadMatrixAttivita();
 });
 matrixZoomOutBtn.addEventListener("click", async () => {
   if (matrixState.view === "week") {
+    matrixState.view = "two";
+  } else if (matrixState.view === "two") {
     matrixState.view = "three";
   } else if (matrixState.view === "three") {
     matrixState.view = "six";
   }
+  matrixState.date = startOfWeek(matrixState.date);
   setMatrixViewLabel();
   await loadMatrixAttivita();
 });
@@ -3267,6 +3426,11 @@ if (matrixColorByCommessaBtn) {
 if (matrixAssenzaItem) {
   matrixAssenzaItem.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("application/x-assenza", "1");
+  });
+}
+if (matrixAltroItem) {
+  matrixAltroItem.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("application/x-altro", "1");
   });
 }
 if (matrixShiftToggle) {
@@ -3356,6 +3520,20 @@ if (activityDeleteBtn) {
 if (activityModal) {
   activityModal.addEventListener("click", (e) => {
     if (e.target === activityModal) closeActivityModal();
+  });
+}
+if (confirmCloseBtn) {
+  confirmCloseBtn.addEventListener("click", () => closeConfirmModal(false));
+}
+if (confirmCancelBtn) {
+  confirmCancelBtn.addEventListener("click", () => closeConfirmModal(false));
+}
+if (confirmOkBtn) {
+  confirmOkBtn.addEventListener("click", () => closeConfirmModal(true));
+}
+if (confirmModal) {
+  confirmModal.addEventListener("click", (e) => {
+    if (e.target === confirmModal) closeConfirmModal(false);
   });
 }
 if (assignAssenzaFullBtn && assignAssenzaOre) {
@@ -3453,6 +3631,8 @@ supabase.auth.onAuthStateChange(async (_event, session) => {
     state.commesse = [];
     authStatus.textContent = "Non autenticato";
     logoutBtn.classList.add("hidden");
+    if (authActions) authActions.classList.remove("is-authenticated");
+    if (authDot) authDot.classList.add("hidden");
     setRoleBadge("");
     setWriteAccess(false);
     commesseList.innerHTML = "";
