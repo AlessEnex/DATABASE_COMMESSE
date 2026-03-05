@@ -32,6 +32,7 @@ const logoutBtn = el("logoutBtn");
 const authActions = el("authActions");
 const authDot = el("authDot");
 const resetPasswordBtn = el("resetPasswordBtn");
+const resetPasswordFeedback = el("resetPasswordFeedback");
 
 const commesseList = el("commesseList");
 const searchInput = el("searchInput");
@@ -1095,10 +1096,18 @@ async function resetPassword() {
   });
   setAuthLoading(false);
   if (error) {
-    setStatus(`Errore reset: ${error.message}`, "error");
+    if (resetPasswordFeedback) {
+      resetPasswordFeedback.textContent = `Errore reset: ${error.message}`;
+      resetPasswordFeedback.classList.remove("hidden");
+      resetPasswordFeedback.classList.add("error");
+    }
     return;
   }
-  setStatus("Ti ho inviato il link per reimpostare la password.", "ok");
+  if (resetPasswordFeedback) {
+    resetPasswordFeedback.textContent = "Ti ho inviato il link per reimpostare la password.";
+    resetPasswordFeedback.classList.remove("hidden");
+    resetPasswordFeedback.classList.remove("error");
+  }
 }
 
 async function signOut() {

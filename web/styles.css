@@ -121,6 +121,17 @@ body {
   text-decoration: underline;
 }
 
+.auth-feedback {
+  font-size: 11px;
+  color: #1f5c4a;
+  width: 100%;
+  text-align: right;
+}
+
+.auth-feedback.error {
+  color: #a33d3d;
+}
+
 .auth-status {
   font-size: 13px;
   color: var(--muted);
