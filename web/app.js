@@ -1319,6 +1319,8 @@ function getMatrixRange() {
     ? endOfDay(addDays(start, 41))
     : matrixState.view === "three"
     ? endOfDay(addDays(start, 20))
+    : matrixState.view === "two"
+    ? endOfDay(addDays(start, 13))
     : endOfDay(addDays(start, 6));
   return { start, end };
 }
@@ -2952,6 +2954,8 @@ async function loadMatrixAttivita() {
     ? endOfDay(addDays(start, 41))
     : matrixState.view === "three"
     ? endOfDay(addDays(start, 20))
+    : matrixState.view === "two"
+    ? endOfDay(addDays(start, 13))
     : endOfDay(addDays(start, 6));
   const { data, error } = await supabase
     .from("attivita")
