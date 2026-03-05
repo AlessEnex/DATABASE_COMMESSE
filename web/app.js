@@ -12,6 +12,7 @@ const state = {
   profile: null,
   reparti: [],
   commesse: [],
+  risorse: [],
   selected: null,
   canWrite: false,
   realtime: null,
@@ -44,6 +45,24 @@ const newRepartiChecks = el("newRepartiChecks");
 const repartiList = el("repartiList");
 const addRepartoForm = el("addRepartoForm");
 const addRepartoSelect = el("addRepartoSelect");
+const openResourcesBtn = el("openResourcesBtn");
+const resourcesModal = el("resourcesModal");
+const closeResourcesBtn = el("closeResourcesBtn");
+const openProgressBtn = el("openProgressBtn");
+const progressModal = el("progressModal");
+const closeProgressBtn = el("closeProgressBtn");
+const progressYearCurrent = el("progressYearCurrent");
+const progressYearPrev = el("progressYearPrev");
+const progressSearch = el("progressSearch");
+const progressResults = el("progressResults");
+const progressMeta = el("progressMeta");
+const progressList = el("progressList");
+const progressTimelineDays = el("progressTimelineDays");
+const resourcesList = el("resourcesList");
+const resourceForm = el("resourceForm");
+const resourceName = el("resourceName");
+const resourceReparto = el("resourceReparto");
+const resourceActive = el("resourceActive");
 
 const importModal = el("importModal");
 const importTextarea = el("importTextarea");
@@ -162,7 +181,44 @@ const matrixState = {
   suppressClickUntil: 0,
   autoShift: false,
   reportSort: "asc",
+  collapsedReparti: new Set(),
 };
+
+let commessaHighlightId = null;
+let commessaHighlightTimer = null;
+let commessaHighlightAt = 0;
+let commessaLongPressSuppress = false;
+
+function applyCommessaHighlight(commessaId) {
+  if (!matrixGrid) return;
+  if (!commessaId) return;
+  commessaHighlightId = commessaId;
+  commessaHighlightAt = Date.now();
+  commessaLongPressSuppress = true;
+  const bars = matrixGrid.querySelectorAll(".matrix-activity-bar");
+  bars.forEach((bar) => {
+    const same = bar.dataset && bar.dataset.commessaId === String(commessaId);
+    bar.classList.toggle("commessa-highlight", same);
+    bar.classList.toggle("commessa-dim", !same);
+  });
+}
+
+function clearCommessaHighlight() {
+  if (!matrixGrid) return;
+  if (!commessaHighlightId) return;
+  const bars = matrixGrid.querySelectorAll(".matrix-activity-bar");
+  bars.forEach((bar) => {
+    bar.classList.remove("commessa-highlight", "commessa-dim");
+  });
+  commessaHighlightId = null;
+}
+
+function cancelCommessaHighlightTimer() {
+  if (commessaHighlightTimer) {
+    clearTimeout(commessaHighlightTimer);
+    commessaHighlightTimer = null;
+  }
+}
 
 function setMatrixViewLabel() {
   return;
@@ -366,7 +422,12 @@ function openActivityModal(attivita) {
   if (activityTitleList) {
     activityTitleList.innerHTML = "";
     const options = getMatrixAttivitaOptions();
-    const list = options.includes(attivita.titolo) ? options : [...options, attivita.titolo];
+    const allowed = options.filter((name) => isActivityAllowedForRisorsa(name, attivita.risorsa_id));
+    const list = options.includes(attivita.titolo)
+      ? allowed.includes(attivita.titolo)
+        ? allowed
+        : [...allowed, attivita.titolo]
+      : allowed;
     list.forEach((name) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -422,6 +483,11 @@ async function saveActivityDuration() {
     setStatus("ASSENTE va assegnata da sola.", "error");
     return;
   }
+  const notAllowed = titles.filter((t) => !isActivityAllowedForRisorsa(t, attivita.risorsa_id));
+  if (notAllowed.length) {
+    setStatus("Alcune attivita non sono disponibili per questo reparto.", "error");
+    return;
+  }
   const altroNote = activityAltroNote ? activityAltroNote.value.trim() : "";
   const assenzaOreRaw = activityAssenzaOre ? activityAssenzaOre.value : "";
   const assenzaOre = Number(assenzaOreRaw);
@@ -443,15 +509,20 @@ async function saveActivityDuration() {
         id: attivita.id,
         commessa_id: isAssenteTitle(firstTitle) ? null : attivita.commessa_id,
         titolo: firstTitle,
+        data_fine: attivita.data_fine,
       }
     : null;
   let dependentActivities = null;
+  let dependentToShift = null;
   if (matrixState.autoShift && keyForChain && deltaDays !== 0) {
     dependentActivities = await getDependentActivitiesForKey(keyForChain);
     if (dependentActivities == null) return;
+    dependentToShift = getDependentActivitiesToShift(keyForChain, deltaDays, dependentActivities);
   }
   const excludeIds =
-    keyForChain && dependentActivities ? [attivita.id, ...dependentActivities.map((a) => a.id)] : [attivita.id];
+    keyForChain && dependentToShift && dependentToShift.length
+      ? [attivita.id, ...dependentToShift.map((a) => a.id)]
+      : [attivita.id];
   if (matrixState.autoShift && deltaDays > 0) {
     const extStart = addDays(oldEndDay, 1);
     const overlap = await hasOverlapRange(attivita.risorsa_id, extStart, newEndDayValue, attivita.id);
@@ -501,8 +572,8 @@ async function saveActivityDuration() {
       return;
     }
   }
-  if (keyForChain && deltaDays !== 0) {
-    const ok = await shiftDependentPhases(keyForChain, deltaDays, dependentActivities);
+  if (keyForChain && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
+    const ok = await shiftDependentPhases(keyForChain, deltaDays, dependentToShift);
     if (!ok) return;
   }
   setStatus(titles.length > 1 ? "Attivita aggiornate." : "Attivita aggiornata.", "ok");
@@ -546,12 +617,16 @@ async function commitResize() {
   const newEndDay = startOfDay(newEnd);
   const deltaDays = businessDayDiff(oldEndDay, newEndDay);
   let dependentActivities = null;
+  let dependentToShift = null;
   if (matrixState.autoShift && isPhaseKey(ctx.attivita.titolo) && deltaDays !== 0) {
     dependentActivities = await getDependentActivitiesForKey(ctx.attivita);
     if (dependentActivities == null) return;
+    dependentToShift = getDependentActivitiesToShift(ctx.attivita, deltaDays, dependentActivities);
   }
   const excludeIds =
-    dependentActivities ? [ctx.attivita.id, ...dependentActivities.map((a) => a.id)] : [ctx.attivita.id];
+    dependentToShift && dependentToShift.length
+      ? [ctx.attivita.id, ...dependentToShift.map((a) => a.id)]
+      : [ctx.attivita.id];
   if (matrixState.autoShift && deltaDays > 0) {
     const extStart = addDays(oldEndDay, 1);
     const overlap = await hasOverlapRange(ctx.attivita.risorsa_id, extStart, newEndDay, ctx.attivita.id);
@@ -577,8 +652,8 @@ async function commitResize() {
     setStatus(`Errore aggiornamento: ${error.message}`, "error");
     return;
   }
-  if (isPhaseKey(ctx.attivita.titolo) && deltaDays !== 0) {
-    const ok = await shiftDependentPhases(ctx.attivita, deltaDays, dependentActivities);
+  if (isPhaseKey(ctx.attivita.titolo) && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
+    const ok = await shiftDependentPhases(ctx.attivita, deltaDays, dependentToShift);
     if (!ok) return;
   }
   setStatus("Durata aggiornata.", "ok");
@@ -595,6 +670,237 @@ function closeAssignModal() {
   assignModal.classList.add("hidden");
   if (assignActivities) assignActivities.innerHTML = "";
   matrixState.pendingDrop = null;
+}
+
+function openResourcesModal() {
+  if (!resourcesModal) return;
+  resourcesModal.classList.remove("hidden");
+}
+
+function closeResourcesModal() {
+  if (!resourcesModal) return;
+  resourcesModal.classList.add("hidden");
+}
+
+function openProgressModal() {
+  if (!progressModal) return;
+  progressModal.classList.remove("hidden");
+  if (progressMeta) progressMeta.textContent = "Seleziona una commessa.";
+  if (progressList) progressList.innerHTML = "";
+  if (progressResults) progressResults.innerHTML = "";
+  const currentYear = new Date().getFullYear();
+  if (progressYearCurrent && progressYearPrev) {
+    progressYearCurrent.dataset.year = String(currentYear);
+    progressYearPrev.dataset.year = String(currentYear - 1);
+    progressYearCurrent.textContent = String(currentYear);
+    progressYearPrev.textContent = String(currentYear - 1);
+    progressYearCurrent.classList.add("active");
+    progressYearPrev.classList.remove("active");
+  }
+  if (progressSearch) progressSearch.value = "";
+  renderProgressResults();
+  if (progressSearch) progressSearch.focus();
+}
+
+function closeProgressModal() {
+  if (!progressModal) return;
+  progressModal.classList.add("hidden");
+}
+
+function getSelectedProgressYear() {
+  if (progressYearCurrent && progressYearCurrent.classList.contains("active")) {
+    return Number(progressYearCurrent.dataset.year);
+  }
+  if (progressYearPrev && progressYearPrev.classList.contains("active")) {
+    return Number(progressYearPrev.dataset.year);
+  }
+  return null;
+}
+
+function renderProgressList(commessa, activities) {
+  if (!progressList || !progressMeta) return;
+  if (!commessa) {
+    progressMeta.textContent = "Commessa non trovata.";
+    progressList.innerHTML = "";
+    if (progressTimelineDays) progressTimelineDays.innerHTML = "";
+    return;
+  }
+  progressMeta.textContent = `${commessa.codice}${commessa.titolo ? " - " + commessa.titolo : ""}`;
+  if (!activities.length) {
+    progressList.innerHTML = `<div class="matrix-empty">Nessuna attivita trovata.</div>`;
+    if (progressTimelineDays) progressTimelineDays.innerHTML = "";
+    return;
+  }
+  const risorseById = new Map((state.risorse || []).map((r) => [r.id, r.nome]));
+  progressList.innerHTML = "";
+  if (progressTimelineDays) {
+    const sorted = activities.slice().sort((a, b) => new Date(a.data_inizio) - new Date(b.data_inizio));
+    const start = startOfDay(new Date(sorted[0].data_inizio));
+    const end = sorted.reduce((max, a) => {
+      const endDay = startOfDay(new Date(a.data_fine));
+      return endDay > max ? endDay : max;
+    }, start);
+    const days = [];
+    let cursor = new Date(start);
+    while (cursor <= end) {
+      if (!isWeekend(cursor)) days.push(new Date(cursor));
+      cursor = addDays(cursor, 1);
+    }
+    if (!days.length) days.push(new Date(start));
+    const timelineRoot = progressTimelineDays.closest(".progress-timeline");
+    const containerWidth = timelineRoot ? timelineRoot.clientWidth : 900;
+    const dayWidth = Math.max(1, Math.floor(containerWidth / days.length));
+    const template = `repeat(${days.length}, minmax(${dayWidth}px, 1fr))`;
+    progressTimelineDays.style.gridTemplateColumns = template;
+    progressList.style.gridTemplateColumns = template;
+    progressTimelineDays.innerHTML = "";
+    days.forEach((day) => {
+      const label = document.createElement("div");
+      label.className = "progress-timeline-day";
+      label.textContent = formatDateHumanNoYear(day);
+      progressTimelineDays.appendChild(label);
+    });
+    const indexByKey = new Map(days.map((d, i) => [formatDateInput(d), i]));
+    const normalizeToBusinessDay = (date, direction) => {
+      let d = startOfDay(new Date(date));
+      while (isWeekend(d)) d = addDays(d, direction);
+      return d;
+    };
+    const laneEnds = [];
+    sorted.forEach((a) => {
+      const titleKey = (a.titolo || "").trim().toLowerCase();
+      const displayTitle =
+        titleKey === "altro" && a.descrizione ? `Altro: ${a.descrizione}` : a.titolo || "Attivita";
+      const color = colorForKey(a.titolo || "attivita");
+      const item = document.createElement("div");
+      item.className = "progress-item";
+      item.innerHTML = `
+        <div class="progress-color" style="--progress-color: ${color.border};"></div>
+        <div class="progress-body">
+          <div class="progress-title">${displayTitle}</div>
+          <div class="progress-meta">${risorseById.get(a.risorsa_id) || "Risorsa n/d"}</div>
+        </div>
+      `;
+      let startDay = normalizeToBusinessDay(a.data_inizio, 1);
+      let endDay = normalizeToBusinessDay(a.data_fine, -1);
+      if (endDay < startDay) endDay = startDay;
+      let startIndex = indexByKey.get(formatDateInput(startDay));
+      let endIndex = indexByKey.get(formatDateInput(endDay));
+      if (startIndex == null || endIndex == null) {
+        progressList.appendChild(item);
+        return;
+      }
+      if (endIndex < startIndex) {
+        const tmp = startIndex;
+        startIndex = endIndex;
+        endIndex = tmp;
+      }
+      let lane = 0;
+      while (lane < laneEnds.length && startIndex <= laneEnds[lane]) lane += 1;
+      if (lane === laneEnds.length) {
+        laneEnds.push(endIndex);
+      } else {
+        laneEnds[lane] = endIndex;
+      }
+      item.style.gridColumn = `${startIndex + 1} / ${endIndex + 2}`;
+      item.style.gridRow = `${lane + 1}`;
+      progressList.appendChild(item);
+    });
+    return;
+  }
+  activities.forEach((a) => {
+    const titleKey = (a.titolo || "").trim().toLowerCase();
+    const displayTitle =
+      titleKey === "altro" && a.descrizione ? `Altro: ${a.descrizione}` : a.titolo || "Attivita";
+    const color = colorForKey(a.titolo || "attivita");
+    const item = document.createElement("div");
+    item.className = "progress-item";
+    item.innerHTML = `
+      <div class="progress-color" style="--progress-color: ${color.border};"></div>
+      <div class="progress-body">
+        <div class="progress-title">${displayTitle}</div>
+        <div class="progress-meta">${risorseById.get(a.risorsa_id) || "Risorsa n/d"}</div>
+      </div>
+    `;
+    progressList.appendChild(item);
+  });
+}
+
+let progressSelectedId = null;
+
+function renderProgressResults() {
+  if (!progressResults) return;
+  const year = getSelectedProgressYear();
+  const q = (progressSearch ? progressSearch.value : "").trim().toLowerCase();
+  const tokens = q
+    ? q
+        .split(/[,\s;]+/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : [];
+  progressResults.innerHTML = "";
+  if (!year) return;
+  let list = state.commesse.filter((c) => Number(c.anno) === year);
+  const sortDate = (c) => {
+    const d = c.data_ingresso || c.data_consegna_prevista || c.data_richiesta;
+    return d ? new Date(d).getTime() : Number.POSITIVE_INFINITY;
+  };
+  if (tokens.length) {
+    list = list.filter((c) => {
+      const num = String(c.numero || "");
+      const code = String(c.codice || "");
+      const title = String(c.titolo || "");
+      const codeLower = code.toLowerCase();
+      const titleLower = title.toLowerCase();
+      return tokens.some((token) => {
+        const isNumber = /^\d+$/.test(token);
+        if (isNumber) {
+          return num === token || codeLower.includes(`_${token}`) || codeLower.includes(token);
+        }
+        return codeLower.includes(token) || titleLower.includes(token);
+      });
+    });
+  }
+  list = list.slice().sort((a, b) => {
+    const da = sortDate(a);
+    const db = sortDate(b);
+    if (da !== db) return da - db;
+    return compareCommesse(a, b);
+  });
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "matrix-empty";
+    empty.textContent = "Nessuna commessa.";
+    progressResults.appendChild(empty);
+    return;
+  }
+  list.forEach((c) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "progress-result";
+    btn.innerHTML = `
+      <div class="progress-result-title">${c.codice}${c.titolo ? " - " + c.titolo : ""}</div>
+    `;
+    btn.dataset.id = c.id;
+    if (progressSelectedId === c.id) btn.classList.add("active");
+    btn.addEventListener("click", async () => {
+      progressSelectedId = c.id;
+      Array.from(progressResults.querySelectorAll(".progress-result")).forEach((el) =>
+        el.classList.toggle("active", el.dataset.id === String(c.id))
+      );
+      const { data, error } = await supabase
+        .from("attivita")
+        .select("*")
+        .eq("commessa_id", c.id)
+        .order("data_inizio", { ascending: true });
+      if (error) {
+        setStatus(`Errore avanzamento: ${error.message}`, "error");
+        return;
+      }
+      renderProgressList(c, data || []);
+    });
+    progressResults.appendChild(btn);
+  });
 }
 
 let statusTimer = null;
@@ -629,7 +935,7 @@ function setWriteAccess(canWrite) {
   state.canWrite = canWrite;
   const disabled = !canWrite;
   const inputs = document.querySelectorAll(
-    "#detailForm input, #detailForm select, #detailForm textarea, #newForm input, #newForm select, #newForm textarea, #addRepartoForm select"
+    "#detailForm input, #detailForm select, #detailForm textarea, #newForm input, #newForm select, #newForm textarea, #addRepartoForm select, #resourceForm input, #resourceForm select, #resourceForm button, #resourcesList input, #resourcesList select, #resourcesList button"
   );
   inputs.forEach((input) => (input.disabled = disabled));
   updateBtn.disabled = disabled;
@@ -768,6 +1074,14 @@ function formatDateLocal(date) {
   return `${y}-${m}-${d}`;
 }
 
+function formatDateHumanNoYear(date) {
+  return date.toLocaleDateString("it-IT", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
 function startOfWeek(date) {
   const d = new Date(date);
   const day = d.getDay() || 7;
@@ -796,6 +1110,13 @@ function weekDaysForView(baseDate, view) {
       ...weekdayDates(start),
       ...weekdayDates(next),
     ];
+  }
+  if (view === "six") {
+    const days = [];
+    for (let i = 0; i < 6; i += 1) {
+      days.push(...weekdayDates(addDays(start, i * 7)));
+    }
+    return days;
   }
   return weekdayDates(start);
 }
@@ -849,7 +1170,9 @@ function businessDayDiff(start, end) {
 
 function getMatrixRange() {
   const start = startOfWeek(matrixState.date);
-  const end = matrixState.view === "three"
+  const end = matrixState.view === "six"
+    ? endOfDay(addDays(start, 41))
+    : matrixState.view === "three"
     ? endOfDay(addDays(start, 20))
     : endOfDay(addDays(start, 6));
   return { start, end };
@@ -884,6 +1207,49 @@ function isPhaseKey(title) {
 
 function getPhaseDependents(title) {
   return PHASE_DEPENDENTS[normalizePhaseKey(title)] || [];
+}
+
+const ACTIVITY_DEPT_LIMITS = {
+  "progettazione termodinamica": ["TERMODINAMICI"],
+  "progettazione elettrica": ["ELETTRICI"],
+  "ordine kit cavi": ["ELETTRICI"],
+};
+
+const DEPT_ACTIVITY_ALLOWLISTS = {
+  TERMODINAMICI: ["Progettazione termodinamica"],
+  ELETTRICI: ["Progettazione elettrica", "Ordine KIT cavi"],
+};
+
+function normalizeDeptKey(name) {
+  const base = (name || "").trim().toUpperCase().replace(/\s+/g, " ");
+  if (!base) return "";
+  const compact = base.replace(/[^A-Z]/g, "");
+  if (compact.includes("TERMO")) return "TERMODINAMICI";
+  if (compact.includes("ELETT")) return "ELETTRICI";
+  if (compact.includes("CAD")) return "CAD";
+  return base;
+}
+
+function getRisorsaDeptName(risorsaId) {
+  if (!risorsaId) return "";
+  const risorsa = (state.risorse || []).find((r) => String(r.id) === String(risorsaId));
+  const reparto = (state.reparti || []).find((rep) => String(rep.id) === String(risorsa?.reparto_id));
+  return reparto ? reparto.nome : "";
+}
+
+function isActivityAllowedForRisorsa(title, risorsaId) {
+  if (isAssenteTitle(title)) return true;
+  const key = normalizePhaseKey(title);
+  if (key === "altro") return true;
+  const dept = normalizeDeptKey(getRisorsaDeptName(risorsaId));
+  const allowlist = DEPT_ACTIVITY_ALLOWLISTS[dept];
+  if (allowlist) {
+    return allowlist.map(normalizePhaseKey).includes(key);
+  }
+  const allowedDepts = ACTIVITY_DEPT_LIMITS[key];
+  if (!allowedDepts) return true;
+  if (!dept) return false;
+  return allowedDepts.map(normalizeDeptKey).includes(dept);
 }
 
 function compareAttivitaStable(a, b) {
@@ -1129,17 +1495,27 @@ async function getDependentActivitiesForKey(keyActivity) {
   );
 }
 
+function shouldShiftDependent(keyActivity, deltaDays, dep) {
+  if (!deltaDays || !keyActivity || !dep) return false;
+  if (!keyActivity.data_fine) return false;
+  const oldEndDay = startOfDay(new Date(keyActivity.data_fine));
+  const newEndDay = addBusinessDays(oldEndDay, deltaDays);
+  const depStartDay = startOfDay(new Date(dep.data_inizio));
+  return oldEndDay < depStartDay && newEndDay >= depStartDay;
+}
+
+function getDependentActivitiesToShift(keyActivity, deltaDays, dependentActivities = []) {
+  return dependentActivities.filter((dep) => shouldShiftDependent(keyActivity, deltaDays, dep));
+}
+
 async function shiftDependentPhases(keyActivity, deltaDays, dependentActivities = null) {
   if (!matrixState.autoShift || !deltaDays) return true;
   if (!keyActivity || !keyActivity.commessa_id) return true;
-  const dependents = getPhaseDependents(keyActivity.titolo);
-  if (!dependents.length) return true;
   let activities = dependentActivities;
   if (!activities) {
     activities = await getDependentActivitiesForKey(keyActivity);
     if (activities == null) return false;
   }
-  activities = activities.filter((a) => dependents.includes(normalizePhaseKey(a.titolo)));
   if (!activities.length) return true;
   activities.sort((a, b) => new Date(a.data_inizio) - new Date(b.data_inizio));
 
@@ -1225,6 +1601,151 @@ function hasGapBefore(list, targetStart) {
   const lastEnd = startOfDay(new Date(last.data_fine));
   const expectedPrevEnd = addBusinessDays(tStart, -1);
   return lastEnd.getTime() < expectedPrevEnd.getTime();
+}
+
+async function handleMatrixDropOnCell(cell, e) {
+  if (!cell || !cell.dataset) return;
+  const risorsaId = cell.dataset.risorsa;
+  const dayKey = cell.dataset.day;
+  if (!risorsaId || !dayKey) return;
+  const r = matrixState.risorse.find((x) => String(x.id) === String(risorsaId));
+  if (!r) return;
+  const d = dateFromKey(dayKey);
+  const assenzaToken = e.dataTransfer.getData("application/x-assenza");
+  if (assenzaToken) {
+    const startAt = new Date(d);
+    startAt.setHours(8, 0, 0, 0);
+    const endAt = new Date(d);
+    endAt.setHours(17, 0, 0, 0);
+    if (matrixState.autoShift) {
+      const hasOverlap = matrixState.attivita.some((a) => a.risorsa_id === r.id && overlapsDay(a, d));
+      if (hasOverlap) {
+        const ok = await shiftRisorsa(r.id, d, 1);
+        if (!ok) return;
+      }
+    }
+    const { data, error } = await supabase
+      .from("attivita")
+      .insert({
+        commessa_id: null,
+        titolo: "ASSENTE",
+        ore_assenza: 8,
+        risorsa_id: r.id,
+        data_inizio: startAt.toISOString(),
+        data_fine: endAt.toISOString(),
+        stato: "pianificata",
+      })
+      .select("*")
+      .single();
+    if (error) {
+      setStatus(`Errore assenza: ${error.message}`, "error");
+      return;
+    }
+    setStatus("Assenza creata.", "ok");
+    openActivityModal(data);
+    await loadMatrixAttivita();
+    return;
+  }
+  const commessaId = e.dataTransfer.getData("application/x-commessa-id");
+  if (commessaId) {
+    matrixState.pendingDrop = { commessaId, risorsaId: r.id, day: d };
+    renderAssignActivities();
+    openAssignModal();
+    return;
+  }
+  const dragId = matrixState.draggingId || e.dataTransfer.getData("text/plain");
+  if (!dragId) return;
+  const item = matrixState.attivita.find((x) => x.id === dragId);
+  if (!item) return;
+
+  const targetDate = new Date(d);
+  const start = new Date(item.data_inizio);
+  const end = new Date(item.data_fine);
+  const newStart = new Date(targetDate);
+  newStart.setHours(start.getHours(), start.getMinutes(), 0, 0);
+  const durationDays = businessDaysBetweenInclusive(start, end);
+  const newEndDay = addBusinessDays(startOfDay(newStart), durationDays - 1);
+  const newEnd = new Date(newEndDay);
+  newEnd.setHours(end.getHours(), end.getMinutes(), end.getSeconds(), end.getMilliseconds());
+  const deltaDays = businessDayDiff(start, newStart);
+
+        const copy = e.altKey || e.ctrlKey || e.metaKey;
+        if (copy) {
+          if (!isActivityAllowedForRisorsa(item.titolo, r.id)) {
+            setStatus("Questa attivita non e disponibile per questo reparto.", "error");
+            return;
+          }
+          if (matrixState.autoShift) {
+            const hasOverlap = matrixState.attivita.some((a) => a.risorsa_id === r.id && overlapsDay(a, targetDate));
+            if (hasOverlap) {
+              const ok = await shiftRisorsa(r.id, targetDate, durationDays);
+              if (!ok) return;
+            }
+          }
+    const { error } = await supabase.from("attivita").insert({
+      commessa_id: item.commessa_id,
+      titolo: item.titolo,
+      descrizione: item.descrizione,
+      risorsa_id: r.id,
+      reparto_id: item.reparto_id,
+      stato: item.stato,
+      data_inizio: newStart.toISOString(),
+      data_fine: newEnd.toISOString(),
+    });
+    if (error) {
+      setStatus(`Errore copia: ${error.message}`, "error");
+      return;
+    }
+    setStatus("Attivita copiata.", "ok");
+        } else {
+          if (!isActivityAllowedForRisorsa(item.titolo, r.id)) {
+            setStatus("Questa attivita non e disponibile per questo reparto.", "error");
+            return;
+          }
+          let dependentActivities = null;
+          let dependentToShift = null;
+          if (matrixState.autoShift && isPhaseKey(item.titolo) && deltaDays !== 0) {
+            dependentActivities = await getDependentActivitiesForKey(item);
+            if (dependentActivities == null) return;
+            dependentToShift = getDependentActivitiesToShift(item, deltaDays, dependentActivities);
+          }
+          const excludeIds =
+            dependentToShift && dependentToShift.length
+              ? [item.id, ...dependentToShift.map((a) => a.id)]
+              : [item.id];
+    if (matrixState.autoShift && deltaDays < 0) {
+      const cutDate = addDays(startOfDay(end), 1);
+      const ok = await shiftRisorsa(r.id, cutDate, deltaDays, excludeIds);
+      if (!ok) return;
+    }
+    if (matrixState.autoShift && deltaDays > 0) {
+      const overlap = await hasOverlapRange(r.id, newStart, newEnd, item.id);
+      if (overlap == null) return;
+      if (overlap) {
+        const cutDate = startOfDay(newStart);
+        const ok = await shiftRisorsa(r.id, cutDate, deltaDays, excludeIds);
+        if (!ok) return;
+      }
+    }
+    const { error } = await supabase
+      .from("attivita")
+      .update({
+        risorsa_id: r.id,
+        data_inizio: newStart.toISOString(),
+        data_fine: newEnd.toISOString(),
+      })
+      .eq("id", item.id);
+    if (error) {
+      setStatus(`Errore spostamento: ${error.message}`, "error");
+      return;
+    }
+          if (isPhaseKey(item.titolo) && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
+            const ok = await shiftDependentPhases(item, deltaDays, dependentToShift);
+            if (!ok) return;
+          }
+    setStatus("Attivita spostata.", "ok");
+  }
+  await loadMatrixAttivita();
 }
 
 function getCommessaLabel(commessaId) {
@@ -1361,6 +1882,105 @@ function renderAddRepartoSelect() {
   });
 }
 
+function renderResourceRepartoSelect(selectEl, selectedId = "") {
+  if (!selectEl) return;
+  selectEl.innerHTML = `<option value="">Reparto</option>`;
+  state.reparti.forEach((r) => {
+    const opt = document.createElement("option");
+    opt.value = r.id;
+    opt.textContent = r.nome;
+    if (selectedId && String(selectedId) === String(r.id)) opt.selected = true;
+    selectEl.appendChild(opt);
+  });
+}
+
+function renderResourcesPanel() {
+  if (!resourcesList) return;
+  resourcesList.innerHTML = "";
+  if (!state.risorse.length) {
+    const empty = document.createElement("div");
+    empty.className = "matrix-empty";
+    empty.textContent = "Nessuna risorsa.";
+    resourcesList.appendChild(empty);
+    return;
+  }
+  state.risorse.slice().sort((a, b) => a.nome.localeCompare(b.nome)).forEach((r) => {
+    const row = document.createElement("div");
+    row.className = "resource-row";
+    row.dataset.id = r.id;
+
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "resource-name";
+    name.value = r.nome || "";
+
+    const reparto = document.createElement("select");
+    reparto.className = "resource-reparto";
+    renderResourceRepartoSelect(reparto, r.reparto_id);
+
+    const activeLabel = document.createElement("label");
+    activeLabel.className = "resource-active";
+    const activeInput = document.createElement("input");
+    activeInput.type = "checkbox";
+    activeInput.checked = r.attiva;
+    const activeText = document.createElement("span");
+    activeText.textContent = "Attiva";
+    activeLabel.appendChild(activeInput);
+    activeLabel.appendChild(activeText);
+
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "ghost";
+    save.textContent = "Salva";
+    save.addEventListener("click", async () => {
+      if (!state.canWrite) return;
+      const nome = name.value.trim();
+      if (!nome) {
+        setStatus("Inserisci il nome della risorsa.", "error");
+        return;
+      }
+      const repartoId = reparto.value || null;
+      const { error } = await supabase
+        .from("risorse")
+        .update({ nome, reparto_id: repartoId, attiva: activeInput.checked })
+        .eq("id", r.id);
+      if (error) {
+        setStatus(`Errore risorsa: ${error.message}`, "error");
+        return;
+      }
+      setStatus("Risorsa aggiornata.", "ok");
+      await loadRisorse();
+    });
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "danger";
+    del.textContent = "Elimina";
+    del.addEventListener("click", async () => {
+      if (!state.canWrite) return;
+      const ok = confirm(`Eliminare la risorsa ${r.nome}?`);
+      if (!ok) return;
+      const { error } = await supabase.from("risorse").delete().eq("id", r.id);
+      if (error) {
+        setStatus(`Errore eliminazione: ${error.message}`, "error");
+        return;
+      }
+      setStatus("Risorsa eliminata.", "ok");
+      await loadRisorse();
+    });
+
+    row.appendChild(name);
+    row.appendChild(reparto);
+    row.appendChild(activeLabel);
+    row.appendChild(save);
+    row.appendChild(del);
+    if (!state.canWrite) {
+      row.querySelectorAll("input, select, button").forEach((el) => (el.disabled = true));
+    }
+    resourcesList.appendChild(row);
+  });
+}
+
 function applyFilters() {
   const q = searchInput.value.trim().toLowerCase();
   const year = yearFilter.value;
@@ -1437,17 +2057,21 @@ async function loadReparti() {
   state.reparti = data || [];
   renderRepartiChecks();
   renderAddRepartoSelect();
+  renderResourceRepartoSelect(resourceReparto);
+  renderResourcesPanel();
 }
 
 async function loadRisorse() {
-  const { data, error } = await supabase.from("risorse").select("*").eq("attiva", true).order("nome");
+  const { data, error } = await supabase.from("risorse").select("*").order("nome");
   if (error) {
     setStatus(`Errore risorse: ${error.message}`, "error");
     return;
   }
-  matrixState.risorse = data || [];
+  state.risorse = data || [];
+  matrixState.risorse = (data || []).filter((r) => r.attiva);
   renderMatrix();
   renderMatrixReport();
+  renderResourcesPanel();
 }
 
 async function loadCommesse() {
@@ -1535,9 +2159,11 @@ function renderMatrixCommesseColumn() {
 function renderAssignActivities() {
   if (!assignActivities) return;
   assignActivities.innerHTML = "";
+  const risorsaId = matrixState.pendingDrop ? matrixState.pendingDrop.risorsaId : null;
   const options = Array.from(matrixAttivita.options)
     .map((o) => o.value)
-    .filter((v) => v && !isAssenteTitle(v));
+    .filter((v) => v && !isAssenteTitle(v))
+    .filter((v) => !risorsaId || isActivityAllowedForRisorsa(v, risorsaId));
   options.forEach((name) => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -1600,16 +2226,66 @@ function renderMatrix() {
   const dayIndex = new Map(dayKeys.map((key, idx) => [key, idx]));
   matrixState.dayIndex = dayIndex;
 
+  const repartoById = new Map(state.reparti.map((rep) => [String(rep.id), rep.nome]));
+  const labelForRisorsa = (r) => repartoById.get(String(r.reparto_id)) || "Senza reparto";
+  const groups = new Map();
   matrixState.risorse.forEach((r) => {
-    const row = document.createElement("div");
-    row.className = "matrix-row";
-    row.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
-    row.style.position = "relative";
+    const label = labelForRisorsa(r);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(r);
+  });
+  const desiredOrder = ["CAD", "TERMODINAMICI", "ELETTRICI"];
+  const orderedLabels = [];
+  desiredOrder.forEach((name) => {
+    const match = Array.from(groups.keys()).find((k) => k.toUpperCase() === name);
+    if (match) orderedLabels.push(match);
+  });
+  const remaining = Array.from(groups.keys())
+    .filter((k) => !orderedLabels.includes(k))
+    .sort((a, b) => a.localeCompare(b));
+  orderedLabels.push(...remaining);
 
-    const nameCell = document.createElement("div");
-    nameCell.className = "matrix-cell matrix-resource";
-    nameCell.textContent = r.nome;
-    row.appendChild(nameCell);
+  orderedLabels.forEach((label) => {
+    const sectionRow = document.createElement("div");
+    sectionRow.className = "matrix-row matrix-section-row";
+    sectionRow.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
+    const sectionCell = document.createElement("div");
+    sectionCell.className = "matrix-section-cell";
+    sectionCell.style.gridColumn = `1 / span ${days.length + 1}`;
+    const isCollapsed = matrixState.collapsedReparti.has(label);
+    sectionCell.innerHTML = `
+      <button class="matrix-section-toggle" type="button" aria-expanded="${!isCollapsed}">
+        ${isCollapsed ? "▸" : "▾"}
+      </button>
+      <span class="matrix-section-title">${label}</span>
+    `;
+    sectionCell.querySelector("button").addEventListener("click", () => {
+      if (matrixState.collapsedReparti.has(label)) {
+        matrixState.collapsedReparti.delete(label);
+      } else {
+        matrixState.collapsedReparti.add(label);
+      }
+      renderMatrix();
+    });
+    sectionRow.appendChild(sectionCell);
+    matrixGrid.appendChild(sectionRow);
+
+    if (isCollapsed) return;
+
+    groups.get(label).forEach((r) => {
+      const row = document.createElement("div");
+      row.className = "matrix-row";
+      row.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
+      row.style.position = "relative";
+
+      const nameCell = document.createElement("div");
+      nameCell.className = "matrix-cell matrix-resource";
+      const reparto = state.reparti.find((rep) => String(rep.id) === String(r.reparto_id));
+      nameCell.innerHTML = `
+        <div class="resource-name">${r.nome}</div>
+        <div class="resource-dept">${reparto ? reparto.nome : "-"}</div>
+      `;
+      row.appendChild(nameCell);
 
     const rowActivities = matrixState.attivita.filter((a) => a.risorsa_id === r.id);
     const filterAttivita = matrixState.selectedAttivita.size > 0;
@@ -1668,129 +2344,7 @@ function renderMatrix() {
         if (!state.canWrite) return;
         e.preventDefault();
         cell.classList.remove("drag-over");
-        const assenzaToken = e.dataTransfer.getData("application/x-assenza");
-        if (assenzaToken) {
-          const startAt = new Date(d);
-          startAt.setHours(8, 0, 0, 0);
-          const endAt = new Date(d);
-          endAt.setHours(17, 0, 0, 0);
-          if (matrixState.autoShift) {
-            const hasOverlap = matrixState.attivita.some((a) => a.risorsa_id === r.id && overlapsDay(a, d));
-            if (hasOverlap) {
-              const ok = await shiftRisorsa(r.id, d, 1);
-              if (!ok) return;
-            }
-          }
-          const { data, error } = await supabase
-            .from("attivita")
-            .insert({
-              commessa_id: null,
-              titolo: "ASSENTE",
-              ore_assenza: 8,
-              risorsa_id: r.id,
-              data_inizio: startAt.toISOString(),
-              data_fine: endAt.toISOString(),
-              stato: "pianificata",
-            })
-            .select("*")
-            .single();
-          if (error) {
-            setStatus(`Errore assenza: ${error.message}`, "error");
-            return;
-          }
-          setStatus("Assenza creata.", "ok");
-          openActivityModal(data);
-          await loadMatrixAttivita();
-          return;
-        }
-        const commessaId = e.dataTransfer.getData("application/x-commessa-id");
-        if (commessaId) {
-          matrixState.pendingDrop = { commessaId, risorsaId: r.id, day: d };
-          renderAssignActivities();
-          openAssignModal();
-          return;
-        }
-        const dragId = matrixState.draggingId || e.dataTransfer.getData("text/plain");
-        if (!dragId) return;
-        const item = matrixState.attivita.find((x) => x.id === dragId);
-        if (!item) return;
-
-        const targetDate = new Date(d);
-        const start = new Date(item.data_inizio);
-        const end = new Date(item.data_fine);
-        const newStart = new Date(targetDate);
-        newStart.setHours(start.getHours(), start.getMinutes(), 0, 0);
-        const durationDays = businessDaysBetweenInclusive(start, end);
-        const newEndDay = addBusinessDays(startOfDay(newStart), durationDays - 1);
-        const newEnd = new Date(newEndDay);
-        newEnd.setHours(end.getHours(), end.getMinutes(), end.getSeconds(), end.getMilliseconds());
-        const deltaDays = businessDayDiff(start, newStart);
-
-        const copy = e.altKey || e.ctrlKey || e.metaKey;
-        if (copy) {
-          if (matrixState.autoShift) {
-            const hasOverlap = matrixState.attivita.some((a) => a.risorsa_id === r.id && overlapsDay(a, targetDate));
-            if (hasOverlap) {
-              const ok = await shiftRisorsa(r.id, targetDate, durationDays);
-              if (!ok) return;
-            }
-          }
-          const { error } = await supabase.from("attivita").insert({
-            commessa_id: item.commessa_id,
-            titolo: item.titolo,
-            descrizione: item.descrizione,
-            risorsa_id: r.id,
-            reparto_id: item.reparto_id,
-            stato: item.stato,
-            data_inizio: newStart.toISOString(),
-            data_fine: newEnd.toISOString(),
-          });
-          if (error) {
-            setStatus(`Errore copia: ${error.message}`, "error");
-            return;
-          }
-          setStatus("Attivita copiata.", "ok");
-        } else {
-          let dependentActivities = null;
-          if (matrixState.autoShift && isPhaseKey(item.titolo) && deltaDays !== 0) {
-            dependentActivities = await getDependentActivitiesForKey(item);
-            if (dependentActivities == null) return;
-          }
-          const excludeIds =
-            dependentActivities ? [item.id, ...dependentActivities.map((a) => a.id)] : [item.id];
-          if (matrixState.autoShift && deltaDays < 0) {
-            const cutDate = addDays(startOfDay(end), 1);
-            const ok = await shiftRisorsa(r.id, cutDate, deltaDays, excludeIds);
-            if (!ok) return;
-          }
-          if (matrixState.autoShift && deltaDays > 0) {
-            const overlap = await hasOverlapRange(r.id, newStart, newEnd, item.id);
-            if (overlap == null) return;
-            if (overlap) {
-              const cutDate = startOfDay(newStart);
-              const ok = await shiftRisorsa(r.id, cutDate, deltaDays, excludeIds);
-              if (!ok) return;
-            }
-          }
-          const { error } = await supabase
-            .from("attivita")
-            .update({
-              risorsa_id: r.id,
-              data_inizio: newStart.toISOString(),
-              data_fine: newEnd.toISOString(),
-            })
-            .eq("id", item.id);
-          if (error) {
-            setStatus(`Errore spostamento: ${error.message}`, "error");
-            return;
-          }
-          if (isPhaseKey(item.titolo) && deltaDays !== 0) {
-            const ok = await shiftDependentPhases(item, deltaDays, dependentActivities);
-            if (!ok) return;
-          }
-          setStatus("Attivita spostata.", "ok");
-        }
-        await loadMatrixAttivita();
+        await handleMatrixDropOnCell(cell, e);
       });
 
       cell.addEventListener("click", async () => {
@@ -1812,6 +2366,11 @@ function renderMatrix() {
         }
         if (!hasAssente && commesseSel.length > 1) {
           setStatus("Seleziona una sola commessa per assegnare.", "error");
+          return;
+        }
+        const notAllowed = attivitaList.filter((t) => !isActivityAllowedForRisorsa(t, r.id));
+        if (notAllowed.length) {
+          setStatus("Alcune attivita non sono disponibili per questo reparto.", "error");
           return;
         }
         const commessaId = hasAssente ? null : commesseSel[0];
@@ -1913,6 +2472,7 @@ function renderMatrix() {
         <span class="activity-title">${displayTitle || ""}</span>
       `
         : `<strong class="commessa-num">${displayTitle || ""}</strong>`;
+      bar.dataset.commessaId = b.a.commessa_id ? String(b.a.commessa_id) : "";
       if (matrixState.colorMode !== "none") {
         const key =
           matrixState.colorMode === "activity"
@@ -1936,6 +2496,7 @@ function renderMatrix() {
           e.preventDefault();
           return;
         }
+        cancelCommessaHighlightTimer();
         matrixState.suppressClickUntil = Date.now() + 300;
         matrixState.draggingId = b.a.id;
         if (matrixGrid) matrixGrid.classList.add("matrix-dragging");
@@ -1947,10 +2508,48 @@ function renderMatrix() {
         if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
         bar.classList.remove("dragging");
       });
+      bar.addEventListener("mousedown", (e) => {
+        if (!state.canWrite) return;
+        if (matrixState.resizing) return;
+        if (e.button !== 0) return;
+        cancelCommessaHighlightTimer();
+        commessaHighlightTimer = setTimeout(() => {
+          commessaHighlightTimer = null;
+          if (matrixState.draggingId) return;
+          if (!b.a.commessa_id) return;
+          applyCommessaHighlight(String(b.a.commessa_id));
+          matrixState.suppressClickUntil = Date.now() + 600;
+        }, 450);
+      });
+      bar.addEventListener("mouseup", () => {
+        cancelCommessaHighlightTimer();
+      });
+      bar.addEventListener("mouseleave", () => {
+        cancelCommessaHighlightTimer();
+      });
+      bar.addEventListener("dragover", (e) => {
+        if (!state.canWrite) return;
+        e.preventDefault();
+      });
+      bar.addEventListener("drop", async (e) => {
+        if (!state.canWrite) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const elements = document.elementsFromPoint(e.clientX, e.clientY);
+        const cell = elements.find((el) => el.classList && el.classList.contains("matrix-cell"));
+        if (cell) {
+          await handleMatrixDropOnCell(cell, e);
+        }
+      });
       bar.addEventListener("click", async (e) => {
         e.stopPropagation();
         if (!state.canWrite) return;
         if (Date.now() < matrixState.suppressClickUntil) return;
+        if (commessaLongPressSuppress) {
+          commessaLongPressSuppress = false;
+          return;
+        }
+        clearCommessaHighlight();
         openActivityModal(b.a);
       });
       const handle = document.createElement("span");
@@ -2010,7 +2609,8 @@ function renderMatrix() {
       barLayer.appendChild(bar);
     });
 
-    matrixGrid.appendChild(row);
+      matrixGrid.appendChild(row);
+    });
   });
 }
 
@@ -2060,7 +2660,7 @@ function renderMatrixReport() {
     matrixReportGrid.appendChild(h);
   });
 
-  const risorseById = new Map((matrixState.risorse || []).map((r) => [r.id, r.nome]));
+  const risorseById = new Map((state.risorse || []).map((r) => [r.id, r.nome]));
 
   commesse.forEach((c) => {
     const commessaCell = document.createElement("div");
@@ -2102,7 +2702,9 @@ function renderMatrixReport() {
 async function loadMatrixAttivita() {
   if (!state.session) return;
   const start = startOfWeek(matrixState.date);
-  const end = matrixState.view === "three"
+  const end = matrixState.view === "six"
+    ? endOfDay(addDays(start, 41))
+    : matrixState.view === "three"
     ? endOfDay(addDays(start, 20))
     : endOfDay(addDays(start, 6));
   const { data, error } = await supabase
@@ -2436,6 +3038,88 @@ statusFilter.addEventListener("change", applyFilters);
 detailForm.addEventListener("submit", handleUpdate);
 newForm.addEventListener("submit", handleCreate);
 addRepartoForm.addEventListener("submit", handleAddReparto);
+if (openResourcesBtn) {
+  openResourcesBtn.addEventListener("click", openResourcesModal);
+}
+if (closeResourcesBtn) {
+  closeResourcesBtn.addEventListener("click", closeResourcesModal);
+}
+if (resourcesModal) {
+  resourcesModal.addEventListener("click", (e) => {
+    if (e.target === resourcesModal) closeResourcesModal();
+  });
+}
+if (openProgressBtn) {
+  openProgressBtn.addEventListener("click", openProgressModal);
+}
+if (closeProgressBtn) {
+  closeProgressBtn.addEventListener("click", closeProgressModal);
+}
+if (progressModal) {
+  progressModal.addEventListener("click", (e) => {
+    if (e.target === progressModal) closeProgressModal();
+  });
+}
+if (progressYearCurrent) {
+  progressYearCurrent.addEventListener("click", () => {
+    progressYearCurrent.classList.add("active");
+    if (progressYearPrev) progressYearPrev.classList.remove("active");
+    progressSelectedId = null;
+    if (progressMeta) progressMeta.textContent = "Seleziona una commessa.";
+    if (progressList) progressList.innerHTML = "";
+    renderProgressResults();
+  });
+}
+if (progressYearPrev) {
+  progressYearPrev.addEventListener("click", () => {
+    progressYearPrev.classList.add("active");
+    if (progressYearCurrent) progressYearCurrent.classList.remove("active");
+    progressSelectedId = null;
+    if (progressMeta) progressMeta.textContent = "Seleziona una commessa.";
+    if (progressList) progressList.innerHTML = "";
+    renderProgressResults();
+  });
+}
+  if (progressSearch) {
+    progressSearch.addEventListener("input", () => {
+      progressSelectedId = null;
+      if (progressMeta) progressMeta.textContent = "Seleziona una commessa.";
+      if (progressList) progressList.innerHTML = "";
+      if (progressTimelineDays) progressTimelineDays.innerHTML = "";
+      renderProgressResults();
+    });
+  }
+if (resourceForm) {
+  resourceForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.canWrite) return;
+    const nome = resourceName.value.trim();
+    if (!nome) {
+      setStatus("Inserisci il nome della risorsa.", "error");
+      return;
+    }
+    const repartoId = resourceReparto.value;
+    if (!repartoId) {
+      setStatus("Seleziona un reparto.", "error");
+      return;
+    }
+    const payload = {
+      nome,
+      reparto_id: repartoId,
+      attiva: resourceActive.checked,
+    };
+    const { error } = await supabase.from("risorse").insert(payload);
+    if (error) {
+      setStatus(`Errore creazione risorsa: ${error.message}`, "error");
+      return;
+    }
+    resourceName.value = "";
+    resourceReparto.value = "";
+    resourceActive.checked = true;
+    setStatus("Risorsa aggiunta.", "ok");
+    await loadRisorse();
+  });
+}
 clearSelectionBtn.addEventListener("click", clearSelection);
 openImportBtn.addEventListener("click", openImportModal);
 closeImportBtn.addEventListener("click", closeImportModal);
@@ -2475,13 +3159,13 @@ matrixDate.addEventListener("change", async (e) => {
   await loadMatrixAttivita();
 });
 matrixPrevBtn.addEventListener("click", async () => {
-  const step = matrixState.view === "three" ? 21 : 7;
+  const step = matrixState.view === "six" ? 42 : matrixState.view === "three" ? 21 : 7;
   matrixState.date = addDays(matrixState.date, -step);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
 });
 matrixNextBtn.addEventListener("click", async () => {
-  const step = matrixState.view === "three" ? 21 : 7;
+  const step = matrixState.view === "six" ? 42 : matrixState.view === "three" ? 21 : 7;
   matrixState.date = addDays(matrixState.date, step);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
@@ -2492,12 +3176,20 @@ matrixTodayBtn.addEventListener("click", async () => {
   await loadMatrixAttivita();
 });
 matrixZoomInBtn.addEventListener("click", async () => {
-  matrixState.view = "week";
+  if (matrixState.view === "six") {
+    matrixState.view = "three";
+  } else {
+    matrixState.view = "week";
+  }
   setMatrixViewLabel();
   await loadMatrixAttivita();
 });
 matrixZoomOutBtn.addEventListener("click", async () => {
-  matrixState.view = "three";
+  if (matrixState.view === "week") {
+    matrixState.view = "three";
+  } else if (matrixState.view === "three") {
+    matrixState.view = "six";
+  }
   setMatrixViewLabel();
   await loadMatrixAttivita();
 });
@@ -2636,6 +3328,7 @@ document.addEventListener("mouseup", () => {
     matrixState.suppressClickUntil = Date.now() + 500;
     commitResize();
   }
+  cancelCommessaHighlightTimer();
 });
 document.addEventListener("dragend", () => {
   if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
@@ -2646,6 +3339,17 @@ document.addEventListener("drop", () => {
   if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
   matrixState.draggingId = null;
   document.querySelectorAll(".matrix-activity-bar.dragging").forEach((el) => el.classList.remove("dragging"));
+});
+document.addEventListener("click", (e) => {
+  if (commessaLongPressSuppress) {
+    commessaLongPressSuppress = false;
+    return;
+  }
+  if (!matrixGrid || !commessaHighlightId) return;
+  const bar = e.target.closest(".matrix-activity-bar");
+  if (!bar) {
+    clearCommessaHighlight();
+  }
 });
 
 setMatrixColorMode("commessa");
@@ -2681,3 +3385,4 @@ supabase.auth.onAuthStateChange(async (_event, session) => {
 init();
 
 })();
+

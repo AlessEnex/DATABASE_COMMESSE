@@ -34,6 +34,9 @@
       <section class="status-bar">
         <div id="roleBadge" class="badge hidden">Ruolo</div>
         <div id="statusMsg" class="status-msg">Inserisci le credenziali Supabase.</div>
+        <div class="status-actions">
+          <button id="openResourcesBtn" class="ghost" type="button">Gestisci risorse</button>
+        </div>
       </section>
 
       <main class="layout">
@@ -184,6 +187,7 @@
           </form>
         </section>
 
+
         <section class="panel calendar-panel">
           <div class="panel-header">
             <h2>Calendario attivita</h2>
@@ -246,6 +250,9 @@
                 <option value="Carenatura">Carenatura</option>
                 <option value="Preliminare">Preliminare</option>
                 <option value="Consegna totale">Consegna totale</option>
+                <option value="Progettazione termodinamica">Progettazione termodinamica</option>
+                <option value="Progettazione elettrica">Progettazione elettrica</option>
+                <option value="Ordine KIT cavi">Ordine KIT cavi</option>
                 <option value="ASSENTE">ASSENTE</option>
                 <option value="Altro">Altro</option>
               </select>
@@ -290,6 +297,7 @@
           <div class="panel-header">
             <h2>Reportistica</h2>
             <div class="report-controls">
+              <button id="openProgressBtn" class="ghost" type="button">Mostra avanzamento commessa</button>
               <button id="matrixReportSortBtn" class="ghost" type="button">Ordine: Crescente</button>
               <div id="matrixReportRange" class="mono"></div>
             </div>
@@ -394,6 +402,49 @@
         <div class="modal-actions">
           <button id="activityDeleteBtn" class="danger" type="button">Elimina attivita</button>
           <button id="activitySaveBtn" class="primary" type="button">Salva durata</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="resourcesModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Gestione risorse</h3>
+          <button id="closeResourcesBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <div id="resourcesList" class="resources-list"></div>
+        <form id="resourceForm" class="inline-form resources-form">
+          <input id="resourceName" type="text" placeholder="Nome risorsa" required />
+          <select id="resourceReparto"></select>
+          <label class="resource-active">
+            <input id="resourceActive" type="checkbox" checked />
+            Attiva
+          </label>
+          <button id="resourceAddBtn" class="ghost" type="submit">Aggiungi</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="progressModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Avanzamento commessa</h3>
+          <button id="closeProgressBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <div class="progress-form">
+          <div class="progress-year-group">
+            <button id="progressYearPrev" class="progress-year-pill" type="button"></button>
+            <button id="progressYearCurrent" class="progress-year-pill" type="button"></button>
+          </div>
+          <input id="progressSearch" type="text" placeholder="Numeri o titolo (es. 12, 18)" />
+        </div>
+        <div id="progressResults" class="progress-results"></div>
+        <div id="progressMeta" class="modal-hint"></div>
+        <div id="progressTimeline" class="progress-timeline">
+          <div class="progress-timeline-scroll">
+            <div id="progressTimelineDays" class="progress-timeline-days"></div>
+            <div id="progressList" class="progress-list"></div>
+          </div>
         </div>
       </div>
     </div>
