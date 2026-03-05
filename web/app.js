@@ -58,6 +58,8 @@ const progressResults = el("progressResults");
 const progressMeta = el("progressMeta");
 const progressList = el("progressList");
 const progressTimelineDays = el("progressTimelineDays");
+const matrixQuickMenu = el("matrixQuickMenu");
+const matrixQuickToggleBtn = el("matrixQuickToggleBtn");
 const resourcesList = el("resourcesList");
 const resourceForm = el("resourceForm");
 const resourceName = el("resourceName");
@@ -188,6 +190,7 @@ let commessaHighlightId = null;
 let commessaHighlightTimer = null;
 let commessaHighlightAt = 0;
 let commessaLongPressSuppress = false;
+let quickMenuAttivita = null;
 
 function applyCommessaHighlight(commessaId) {
   if (!matrixGrid) return;
@@ -218,6 +221,55 @@ function cancelCommessaHighlightTimer() {
     clearTimeout(commessaHighlightTimer);
     commessaHighlightTimer = null;
   }
+}
+
+function openMatrixQuickMenu(attivita, x, y) {
+  if (!matrixQuickMenu || !matrixQuickToggleBtn) return;
+  if (!state.canWrite) return;
+  quickMenuAttivita = attivita;
+  const isDone = attivita && attivita.stato === "completata";
+  matrixQuickToggleBtn.textContent = isDone ? "Non fatto" : "Segna fatto";
+  matrixQuickMenu.classList.remove("hidden");
+  const padding = 10;
+  let left = x + 8;
+  let top = y + 8;
+  matrixQuickMenu.style.left = `${left}px`;
+  matrixQuickMenu.style.top = `${top}px`;
+  requestAnimationFrame(() => {
+    const rect = matrixQuickMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth - padding) {
+      left = Math.max(padding, window.innerWidth - rect.width - padding);
+    }
+    if (rect.bottom > window.innerHeight - padding) {
+      top = Math.max(padding, window.innerHeight - rect.height - padding);
+    }
+    matrixQuickMenu.style.left = `${left}px`;
+    matrixQuickMenu.style.top = `${top}px`;
+  });
+  commessaLongPressSuppress = true;
+}
+
+function closeMatrixQuickMenu() {
+  if (!matrixQuickMenu) return;
+  matrixQuickMenu.classList.add("hidden");
+  quickMenuAttivita = null;
+}
+
+async function toggleQuickMenuDone() {
+  if (!quickMenuAttivita) return;
+  if (!state.canWrite) return;
+  const nextState = quickMenuAttivita.stato === "completata" ? "pianificata" : "completata";
+  const { error } = await supabase
+    .from("attivita")
+    .update({ stato: nextState })
+    .eq("id", quickMenuAttivita.id);
+  if (error) {
+    setStatus(`Errore update: ${error.message}`, "error");
+    return;
+  }
+  setStatus(nextState === "completata" ? "Attivita completata." : "Attivita riaperta.", "ok");
+  closeMatrixQuickMenu();
+  await loadMatrixAttivita();
 }
 
 function setMatrixViewLabel() {
@@ -2473,6 +2525,7 @@ function renderMatrix() {
       `
         : `<strong class="commessa-num">${displayTitle || ""}</strong>`;
       bar.dataset.commessaId = b.a.commessa_id ? String(b.a.commessa_id) : "";
+      bar.classList.toggle("is-done", b.a.stato === "completata");
       if (matrixState.colorMode !== "none") {
         const key =
           matrixState.colorMode === "activity"
@@ -2497,6 +2550,7 @@ function renderMatrix() {
           return;
         }
         cancelCommessaHighlightTimer();
+        closeMatrixQuickMenu();
         matrixState.suppressClickUntil = Date.now() + 300;
         matrixState.draggingId = b.a.id;
         if (matrixGrid) matrixGrid.classList.add("matrix-dragging");
@@ -2513,11 +2567,16 @@ function renderMatrix() {
         if (matrixState.resizing) return;
         if (e.button !== 0) return;
         cancelCommessaHighlightTimer();
+        closeMatrixQuickMenu();
+        const pressX = e.clientX;
+        const pressY = e.clientY;
         commessaHighlightTimer = setTimeout(() => {
           commessaHighlightTimer = null;
           if (matrixState.draggingId) return;
-          if (!b.a.commessa_id) return;
-          applyCommessaHighlight(String(b.a.commessa_id));
+          if (b.a.commessa_id) {
+            applyCommessaHighlight(String(b.a.commessa_id));
+          }
+          openMatrixQuickMenu(b.a, pressX, pressY);
           matrixState.suppressClickUntil = Date.now() + 600;
         }, 450);
       });
@@ -2549,6 +2608,7 @@ function renderMatrix() {
           commessaLongPressSuppress = false;
           return;
         }
+        closeMatrixQuickMenu();
         clearCommessaHighlight();
         openActivityModal(b.a);
       });
@@ -3132,6 +3192,7 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeImportModal();
     closeAssignModal();
+    closeMatrixQuickMenu();
   }
 });
 calendarView.addEventListener("change", async (e) => {
@@ -3270,6 +3331,19 @@ if (matrixFilterModal) {
     if (e.target === matrixFilterModal) closeMatrixFilter();
   });
 }
+if (matrixQuickToggleBtn) {
+  matrixQuickToggleBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleQuickMenuDone();
+  });
+}
+document.addEventListener(
+  "scroll",
+  () => {
+    closeMatrixQuickMenu();
+  },
+  true
+);
 if (activityCloseBtn) {
   activityCloseBtn.addEventListener("click", closeActivityModal);
 }
@@ -3334,13 +3408,20 @@ document.addEventListener("dragend", () => {
   if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
   matrixState.draggingId = null;
   document.querySelectorAll(".matrix-activity-bar.dragging").forEach((el) => el.classList.remove("dragging"));
+  closeMatrixQuickMenu();
 });
 document.addEventListener("drop", () => {
   if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
   matrixState.draggingId = null;
   document.querySelectorAll(".matrix-activity-bar.dragging").forEach((el) => el.classList.remove("dragging"));
+  closeMatrixQuickMenu();
 });
 document.addEventListener("click", (e) => {
+  if (matrixQuickMenu && !matrixQuickMenu.classList.contains("hidden")) {
+    if (!e.target.closest("#matrixQuickMenu")) {
+      closeMatrixQuickMenu();
+    }
+  }
   if (commessaLongPressSuppress) {
     commessaLongPressSuppress = false;
     return;

@@ -1212,6 +1212,39 @@ button {
   );
 }
 
+.matrix-activity-bar.is-done {
+  opacity: 0.55;
+}
+
+.matrix-activity-bar.is-done::after {
+  content: "✓";
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #2f6f3d;
+}
+
+.matrix-quick-menu {
+  position: fixed;
+  z-index: 140;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+}
+
+.matrix-quick-menu button {
+  border: 1px solid #2f6f3d;
+  background: #e9f5ee;
+  color: #1f4f2b;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .quick-buttons {
   display: flex;
   gap: 8px;
