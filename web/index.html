@@ -23,7 +23,7 @@
         </div>
         <div class="topbar-right">
           <div class="topbar-actions">
-            <div id="statusMsg" class="status-msg"></div>
+            <div id="statusMsg" class="status-msg hidden"></div>
           </div>
           <div class="auth">
             <div class="auth-status-line">
@@ -119,7 +119,7 @@
                 </button>
               </div>
               <div class="matrix-control">
-                <button id="matrixToggleListBtn" class="ghost matrix-flat-btn" type="button">Comprimi lista</button>
+                <button id="matrixToggleListBtn" class="ghost matrix-flat-btn hidden" type="button">Comprimi lista</button>
               </div>
               <div class="matrix-control">
                 <select id="matrixCommessa" class="hidden"></select>
@@ -167,13 +167,32 @@
                 </div>
                 <span class="matrix-control-label">Colori</span>
               </div>
+              <div class="matrix-control">
+                <button id="matrixTrash" class="matrix-trash" type="button" aria-label="Elimina">
+                  <svg
+                    class="trash-icon"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4h8v2" />
+                    <path d="M6 6l1 14h10l1-14" />
+                    <path d="M10 10v6M14 10v6" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
           <div id="matrixWrap" class="matrix-wrap">
             <div id="matrixCommessePanel" class="matrix-commesse">
               <div class="matrix-commesse-header">
                 <span>Commesse</span>
-                <input id="matrixCommessaSearch" type="text" placeholder="Cerca..." />
+                <input id="matrixCommessaSearch" type="text" placeholder="Cerca numero o descrizione" />
               </div>
               <div id="matrixCommesseList" class="matrix-commesse-list"></div>
               <div class="matrix-commesse-footer">
@@ -245,11 +264,16 @@
         <form id="detailForm" class="form">
           <div class="grid">
             <label>
-              Codice
-              <input id="d_codice" type="text" placeholder="2026_001" />
+              Anno
+              <input id="d_anno" type="number" min="2000" max="2100" placeholder="2026" />
             </label>
             <label>
-              Titolo
+              Numero
+              <input id="d_numero" type="number" min="1" step="1" placeholder="99" />
+            </label>
+            <div id="d_numeroWarning" class="form-warning hidden"></div>
+            <label>
+              Descrizione
               <input id="d_titolo" type="text" placeholder="Descrizione breve" />
             </label>
             <label>
@@ -312,13 +336,22 @@
         </div>
         <form id="newForm" class="form">
           <label>
-            Codice
-            <input id="n_codice" type="text" placeholder="2026_99" required />
+            Anno
+            <input id="n_anno" type="number" min="2000" max="2100" placeholder="2026" required />
           </label>
+          <label>
+            Numero
+            <input id="n_numero" type="number" min="1" step="1" placeholder="99" required />
+          </label>
+          <div id="n_numeroWarning" class="form-warning hidden"></div>
           <label>
             Descrizione
             <input id="n_titolo" type="text" placeholder="S4+3 Renkin ..." required />
           </label>
+          <div class="form-preview">
+            Codice univoco:
+            <span id="n_codicePreview" class="mono">-</span>
+          </div>
           <label>
             Cliente
             <input id="n_cliente" type="text" placeholder="Cliente" />
@@ -446,7 +479,6 @@
       <div class="modal-card">
         <div class="modal-header">
           <h3>Conferma</h3>
-          <button id="confirmCloseBtn" class="ghost" type="button">Chiudi</button>
         </div>
         <div id="confirmMessage" class="modal-hint"></div>
         <div class="modal-actions">

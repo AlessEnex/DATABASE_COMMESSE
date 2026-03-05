@@ -96,6 +96,7 @@ const matrixToggleListBtn = el("matrixToggleListBtn");
 const matrixShiftToggle = el("matrixShiftToggle");
 const matrixColorByActivityBtn = el("matrixColorByActivityBtn");
 const matrixColorByCommessaBtn = el("matrixColorByCommessaBtn");
+const matrixTrash = el("matrixTrash");
 const matrixGrid = el("matrixGrid");
 const matrixCommessa = el("matrixCommessa");
 const matrixAttivita = el("matrixAttivita");
@@ -149,12 +150,12 @@ const activityDeleteBtn = el("activityDeleteBtn");
 const activitySaveBtn = el("activitySaveBtn");
 const confirmModal = el("confirmModal");
 const confirmMessage = el("confirmMessage");
-const confirmCloseBtn = el("confirmCloseBtn");
 const confirmCancelBtn = el("confirmCancelBtn");
 const confirmOkBtn = el("confirmOkBtn");
 
 const d = {
-  codice: el("d_codice"),
+  anno: el("d_anno"),
+  numero: el("d_numero"),
   titolo: el("d_titolo"),
   cliente: el("d_cliente"),
   stato: el("d_stato"),
@@ -165,7 +166,8 @@ const d = {
 };
 
 const n = {
-  codice: el("n_codice"),
+  anno: el("n_anno"),
+  numero: el("n_numero"),
   titolo: el("n_titolo"),
   cliente: el("n_cliente"),
   stato: el("n_stato"),
@@ -174,6 +176,10 @@ const n = {
   data_consegna: el("n_data_consegna"),
   note: el("n_note"),
 };
+
+const newNumeroWarning = el("n_numeroWarning");
+const detailNumeroWarning = el("d_numeroWarning");
+const newCodicePreview = el("n_codicePreview");
 
 const calendarState = {
   view: "week",
@@ -208,6 +214,7 @@ let commessaHighlightAt = 0;
 let commessaLongPressSuppress = false;
 let quickMenuAttivita = null;
 let confirmResolver = null;
+let confirmAction = null;
 
 function applyCommessaHighlight(commessaId) {
   if (!matrixGrid) return;
@@ -653,16 +660,29 @@ async function saveActivityDuration() {
 async function deleteActivity() {
   const attivita = matrixState.editingAttivita;
   if (!attivita) return;
-  const ok = await openConfirmModal("Eliminare questa attivita?");
-  if (!ok) return;
-  const { error } = await supabase.from("attivita").delete().eq("id", attivita.id);
-  if (error) {
-    setStatus(`Errore rimozione: ${error.message}`, "error");
-    return;
-  }
-  setStatus("Attivita rimossa.", "ok");
-  closeActivityModal();
-  await loadMatrixAttivita();
+  await openConfirmModal("Eliminare questa attivita?", async () => {
+    const { error } = await supabase.from("attivita").delete().eq("id", attivita.id);
+    if (error) {
+      setStatus(`Errore rimozione: ${error.message}`, "error");
+      return;
+    }
+    setStatus("Attivita rimossa.", "ok");
+    closeActivityModal();
+    await loadMatrixAttivita();
+  });
+}
+
+async function deleteActivityById(id) {
+  if (!id) return;
+  await openConfirmModal("Eliminare questa attivita?", async () => {
+    const { error } = await supabase.from("attivita").delete().eq("id", id);
+    if (error) {
+      setStatus(`Errore rimozione: ${error.message}`, "error");
+      return;
+    }
+    setStatus("Attivita rimossa.", "ok");
+    await loadMatrixAttivita();
+  });
 }
 
 async function commitResize() {
@@ -1068,6 +1088,9 @@ function openCommessaCreateModal() {
   if (!commessaCreateModal) return;
   commessaCreateModal.classList.remove("hidden");
   if (newForm) newForm.reset();
+  if (n.anno && !n.anno.value) n.anno.value = String(new Date().getFullYear());
+  updateNumeroWarning(n.anno, n.numero, newNumeroWarning);
+  updateCodicePreview(n.anno, n.numero, newCodicePreview);
   const firstInput = commessaCreateModal.querySelector("input, textarea, select");
   if (firstInput) firstInput.focus();
 }
@@ -1087,9 +1110,10 @@ function closeCommessaDetailModal() {
   commessaDetailModal.classList.add("hidden");
 }
 
-function openConfirmModal(message) {
+function openConfirmModal(message, onConfirm) {
   if (!confirmModal || !confirmMessage) return Promise.resolve(false);
   confirmMessage.textContent = message;
+  confirmAction = typeof onConfirm === "function" ? onConfirm : null;
   confirmModal.classList.remove("hidden");
   return new Promise((resolve) => {
     confirmResolver = resolve;
@@ -1102,6 +1126,13 @@ function closeConfirmModal(result) {
   if (confirmResolver) {
     confirmResolver(Boolean(result));
     confirmResolver = null;
+  }
+  if (result && confirmAction) {
+    const action = confirmAction;
+    confirmAction = null;
+    action();
+  } else {
+    confirmAction = null;
   }
 }
 
@@ -1914,6 +1945,48 @@ function parseCommessaCode(code) {
   return { year: Number(match[1]), num: Number(match[2]), raw: text };
 }
 
+function normalizeCommessaParts(annoRaw, numeroRaw) {
+  const anno = Number(annoRaw);
+  const numero = Number(numeroRaw);
+  if (!Number.isInteger(anno) || anno < 2000) return null;
+  if (!Number.isInteger(numero) || numero < 1) return null;
+  return {
+    codice: `${anno}_${numero}`,
+    anno,
+    numero,
+  };
+}
+
+function findDuplicateCommessa(anno, numero, excludeId) {
+  if (!Number.isInteger(anno) || !Number.isInteger(numero)) return null;
+  return state.commesse.find(
+    (c) =>
+      Number(c.anno) === anno &&
+      Number(c.numero) === numero &&
+      (!excludeId || String(c.id) !== String(excludeId))
+  );
+}
+
+function updateNumeroWarning(annoInput, numeroInput, warningEl, excludeId) {
+  if (!warningEl || !annoInput || !numeroInput) return;
+  const anno = Number(annoInput.value);
+  const numero = Number(numeroInput.value);
+  const dup = findDuplicateCommessa(anno, numero, excludeId);
+  if (dup) {
+    warningEl.textContent = `Attenzione: ${anno}_${numero} esiste gia (${dup.titolo || "senza descrizione"}).`;
+    warningEl.classList.remove("hidden");
+  } else {
+    warningEl.textContent = "";
+    warningEl.classList.add("hidden");
+  }
+}
+
+function updateCodicePreview(annoInput, numeroInput, previewEl) {
+  if (!previewEl || !annoInput || !numeroInput) return;
+  const normalized = normalizeCommessaParts(annoInput.value, numeroInput.value);
+  previewEl.textContent = normalized ? normalized.codice : "-";
+}
+
 function compareCommesse(a, b) {
   const pa = parseCommessaCode(a.codice);
   const pb = parseCommessaCode(b.codice);
@@ -2171,7 +2244,8 @@ function selectCommessa(id, options = {}) {
   state.selected = commessa;
   selectedCode.textContent = commessa.codice;
 
-  d.codice.value = commessa.codice || "";
+  if (d.anno) d.anno.value = commessa.anno != null ? String(commessa.anno) : "";
+  if (d.numero) d.numero.value = commessa.numero != null ? String(commessa.numero) : "";
   d.titolo.value = commessa.titolo || "";
   d.cliente.value = commessa.cliente || "";
   d.stato.value = commessa.stato || "nuova";
@@ -2182,6 +2256,7 @@ function selectCommessa(id, options = {}) {
 
   renderReparti(commessa);
   renderCommesse(state.commesse);
+  updateNumeroWarning(d.anno, d.numero, detailNumeroWarning, commessa.id);
   if (options.openModal) openCommessaDetailModal();
 }
 
@@ -2297,8 +2372,14 @@ function renderMatrixCommesseColumn() {
   const q = (matrixCommessaSearch.value || "").trim().toLowerCase();
   const items = state.commesse.filter((c) => {
     if (!q) return true;
-    const hay = `${c.codice} ${c.titolo || ""}`.toLowerCase();
-    return hay.includes(q);
+    const code = String(c.codice || "").toLowerCase();
+    const titolo = String(c.titolo || "").toLowerCase();
+    const num = c.numero != null ? String(c.numero) : "";
+    const isNumber = /^\d+$/.test(q);
+    if (isNumber) {
+      return num === q;
+    }
+    return titolo.includes(q) || code.includes(q);
   }).slice().sort(compareCommesse);
   matrixCommesseList.innerHTML = "";
   items.forEach((c) => {
@@ -3003,8 +3084,20 @@ async function handleUpdate(e) {
     setStatus("Seleziona una commessa.", "error");
     return;
   }
+  const normalized = normalizeCommessaParts(d.anno.value, d.numero.value);
+  if (!normalized) {
+    setStatus("Anno o numero non validi.", "error");
+    return;
+  }
+  const dup = findDuplicateCommessa(normalized.anno, normalized.numero, state.selected?.id);
+  if (dup) {
+    setStatus("Numero gia esistente per questo anno.", "error");
+    return;
+  }
   const payload = {
-    codice: d.codice.value.trim(),
+    codice: normalized.codice,
+    anno: normalized.anno,
+    numero: normalized.numero,
     titolo: d.titolo.value.trim() || null,
     cliente: d.cliente.value.trim() || null,
     stato: d.stato.value,
@@ -3024,16 +3117,24 @@ async function handleUpdate(e) {
 
 async function handleCreate(e) {
   e.preventDefault();
-  if (!n.codice.value.trim()) {
-    setStatus("Il codice è obbligatorio.", "error");
-    return;
-  }
   if (!n.titolo.value.trim()) {
     setStatus("La descrizione è obbligatoria.", "error");
     return;
   }
+  const normalized = normalizeCommessaParts(n.anno.value, n.numero.value);
+  if (!normalized) {
+    setStatus("Anno o numero non validi.", "error");
+    return;
+  }
+  const dup = findDuplicateCommessa(normalized.anno, normalized.numero);
+  if (dup) {
+    setStatus("Numero gia esistente per questo anno.", "error");
+    return;
+  }
   const payload = {
-    codice: n.codice.value.trim(),
+    codice: normalized.codice,
+    anno: normalized.anno,
+    numero: normalized.numero,
     titolo: n.titolo.value.trim(),
     cliente: n.cliente.value.trim() || null,
     stato: n.stato.value,
@@ -3205,6 +3306,19 @@ yearFilter.addEventListener("change", applyFilters);
 statusFilter.addEventListener("change", applyFilters);
 detailForm.addEventListener("submit", handleUpdate);
 newForm.addEventListener("submit", handleCreate);
+if (n.anno && n.numero) {
+  const handler = () => {
+    updateNumeroWarning(n.anno, n.numero, newNumeroWarning);
+    updateCodicePreview(n.anno, n.numero, newCodicePreview);
+  };
+  n.anno.addEventListener("input", handler);
+  n.numero.addEventListener("input", handler);
+}
+if (d.anno && d.numero) {
+  const handler = () => updateNumeroWarning(d.anno, d.numero, detailNumeroWarning, state.selected?.id);
+  d.anno.addEventListener("input", handler);
+  d.numero.addEventListener("input", handler);
+}
 if (openNewCommessaBtn) {
   openNewCommessaBtn.addEventListener("click", openCommessaCreateModal);
 }
@@ -3445,6 +3559,25 @@ if (matrixReportSortBtn) {
     renderMatrixReport();
   });
 }
+if (matrixTrash) {
+  matrixTrash.addEventListener("dragover", (e) => {
+    if (!state.canWrite) return;
+    e.preventDefault();
+    matrixTrash.classList.add("is-dragover");
+  });
+  matrixTrash.addEventListener("dragleave", () => {
+    matrixTrash.classList.remove("is-dragover");
+  });
+  matrixTrash.addEventListener("drop", async (e) => {
+    if (!state.canWrite) return;
+    e.preventDefault();
+    e.stopPropagation();
+    matrixTrash.classList.remove("is-dragover");
+    const dragId = matrixState.draggingId || e.dataTransfer.getData("text/plain");
+    if (!dragId) return;
+    await deleteActivityById(dragId);
+  });
+}
 if (matrixCommessaPickerToggleBtn) {
   matrixCommessaPickerToggleBtn.addEventListener("click", () => openMatrixFilter("commessa"));
 }
@@ -3522,9 +3655,6 @@ if (activityModal) {
     if (e.target === activityModal) closeActivityModal();
   });
 }
-if (confirmCloseBtn) {
-  confirmCloseBtn.addEventListener("click", () => closeConfirmModal(false));
-}
 if (confirmCancelBtn) {
   confirmCancelBtn.addEventListener("click", () => closeConfirmModal(false));
 }
@@ -3587,12 +3717,14 @@ document.addEventListener("dragend", () => {
   matrixState.draggingId = null;
   document.querySelectorAll(".matrix-activity-bar.dragging").forEach((el) => el.classList.remove("dragging"));
   closeMatrixQuickMenu();
+  if (matrixTrash) matrixTrash.classList.remove("is-dragover");
 });
 document.addEventListener("drop", () => {
   if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
   matrixState.draggingId = null;
   document.querySelectorAll(".matrix-activity-bar.dragging").forEach((el) => el.classList.remove("dragging"));
   closeMatrixQuickMenu();
+  if (matrixTrash) matrixTrash.classList.remove("is-dragover");
 });
 document.addEventListener("click", (e) => {
   if (matrixQuickMenu && !matrixQuickMenu.classList.contains("hidden")) {

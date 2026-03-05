@@ -179,6 +179,18 @@ body {
   font-weight: 600;
 }
 
+.form-warning {
+  color: #b23b3b;
+  font-size: 12px;
+  margin-top: -6px;
+}
+
+.form-preview {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: -6px;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 1.4fr 1.2fr 1fr;
@@ -213,9 +225,9 @@ body {
 .panel {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 14px 14px 0 0;
   padding: 16px;
-  box-shadow: 0 12px 24px rgba(16, 28, 43, 0.06);
+  box-shadow: none;
   min-height: 200px;
 }
 
@@ -225,6 +237,9 @@ body {
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+  background: transparent;
+  border-radius: 12px 12px 0 0 !important;
+  overflow: hidden;
 }
 
 .panel-header-left {
@@ -601,6 +616,11 @@ button {
   position: relative;
 }
 
+.matrix-panel .panel-header {
+  margin-bottom: 0;
+  padding-bottom: 10px;
+}
+
 .report-panel {
   grid-column: 1 / -1;
 }
@@ -676,13 +696,33 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
+  padding: 6px 10px;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.matrix-control {
+  justify-content: center;
+}
+
+.matrix-control > button,
+.matrix-control > input,
+.matrix-control > select,
+.matrix-control > .matrix-attivita-picker,
+.matrix-control > .mono,
+.matrix-control > .matrix-extra {
+  align-self: center;
 }
 
 .matrix-attivita-picker {
   position: relative;
   width: 100%;
+  display: flex;
+  align-items: center;
 }
 
 .matrix-attivita-field {
@@ -703,9 +743,10 @@ button {
 
 .matrix-control {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 6px;
   align-items: center;
+  justify-content: center;
 }
 
 .matrix-control > button,
@@ -726,39 +767,38 @@ button {
 }
 
 .matrix-controls button.ghost {
-  background: #ffffff;
-  border: 1px solid #cfd6e2;
-  color: #2b3a55;
-  border-radius: 12px;
-  padding: 8px 12px;
-  box-shadow: 0 6px 12px rgba(20, 35, 60, 0.08);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #1a1f2b;
+  border-radius: 6px;
+  padding: 6px 10px;
+  box-shadow: none;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
 .matrix-controls button.ghost:hover {
-  border-color: #9fb3d1;
-  transform: translateY(-1px);
-  box-shadow: 0 10px 16px rgba(20, 35, 60, 0.12);
+  border-color: #c71f2d;
+  color: #c71f2d;
+  background: transparent;
 }
 
 .matrix-controls button.ghost:active {
-  transform: translateY(0);
-  box-shadow: 0 6px 12px rgba(20, 35, 60, 0.08);
+  background: transparent;
 }
 
 .matrix-controls .matrix-icon-btn {
   background: transparent;
-  border: none !important;
+  border: 1px solid transparent !important;
   box-shadow: none !important;
   outline: none;
   padding: 6px 8px;
   font-size: 16px;
-  color: #2b3a55;
+  color: #1a1f2b;
 }
 
 .matrix-controls .matrix-icon-btn:hover {
-  background: #eef3ff;
-  border: none;
+  background: transparent;
+  border-color: #c71f2d;
   box-shadow: none;
   transform: none;
 }
@@ -770,7 +810,7 @@ button {
   outline: none;
   padding: 6px 8px;
   font-size: 14px;
-  color: #2b3a55;
+  color: #1a1f2b;
 }
 
 .matrix-controls .matrix-flat-btn {
@@ -778,7 +818,15 @@ button {
   border: none !important;
   box-shadow: none !important;
   padding: 6px 8px;
-  color: #2b3a55;
+  color: #1a1f2b;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.matrix-controls .matrix-flat-btn:hover {
+  background: transparent;
 }
 
 .matrix-switch {
@@ -874,10 +922,10 @@ button {
 }
 
 .matrix-grid {
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: none;
+  border-radius: 0;
   overflow: visible;
-  background: #ffffff;
+  background: transparent;
   grid-column: 2;
 }
 
@@ -885,12 +933,16 @@ button {
   display: grid;
   grid-template-columns: 240px 1fr;
   gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: #ffffff;
 }
 
 .matrix-commesse {
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: #ffffff;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1170,6 +1222,7 @@ button {
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  border-top: 2px solid #ffffff;
 }
 
 .matrix-row:last-child {
@@ -1379,6 +1432,35 @@ button {
   );
 }
 
+.matrix-trash {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #b23b3b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.matrix-trash svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.matrix-trash.is-dragover {
+  border-color: #b23b3b;
+}
+
 .matrix-activity-bar.is-done {
   background: #2fbf71;
   border-color: #1f8f53;
@@ -1520,13 +1602,13 @@ button {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: var(--card);
+  background: transparent;
   padding-top: 12px;
   padding-bottom: 8px;
-  box-shadow: 0 -12px 0 var(--card), 0 8px 18px rgba(16, 28, 43, 0.08);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-radius: 14px;
+  box-shadow: none;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 0;
   margin: -16px -16px 0 -16px;
   padding-left: 16px;
   padding-right: 16px;
