@@ -26,38 +26,12 @@ const statusMsg = el("statusMsg");
 const revisionStamp = el("revisionStamp");
 
 const emailInput = el("emailInput");
+const passwordInput = el("passwordInput");
 const loginBtn = el("loginBtn");
 const logoutBtn = el("logoutBtn");
 const authActions = el("authActions");
 const authDot = el("authDot");
-
-let loginCooldownTimer = null;
-let loginCooldownUntil = 0;
-
-function setLoginCooldown(seconds) {
-  if (!loginBtn) return;
-  if (loginCooldownTimer) {
-    clearInterval(loginCooldownTimer);
-    loginCooldownTimer = null;
-  }
-  loginCooldownUntil = Date.now() + seconds * 1000;
-  loginBtn.disabled = true;
-  const tick = () => {
-    const remaining = Math.max(0, Math.ceil((loginCooldownUntil - Date.now()) / 1000));
-    if (remaining <= 0) {
-      loginBtn.disabled = false;
-      loginBtn.textContent = "Invia link";
-      if (loginCooldownTimer) {
-        clearInterval(loginCooldownTimer);
-        loginCooldownTimer = null;
-      }
-      return;
-    }
-    loginBtn.textContent = `Attendi ${remaining}s`;
-  };
-  tick();
-  loginCooldownTimer = setInterval(tick, 1000);
-}
+const resetPasswordBtn = el("resetPasswordBtn");
 
 const commesseList = el("commesseList");
 const searchInput = el("searchInput");
@@ -1036,7 +1010,9 @@ function setStatus(message, type = "info") {
 function setAuthLoading(isLoading) {
   loginBtn.disabled = isLoading;
   emailInput.disabled = isLoading;
-  loginBtn.textContent = isLoading ? "Invio..." : "Invia link";
+  if (passwordInput) passwordInput.disabled = isLoading;
+  if (resetPasswordBtn) resetPasswordBtn.disabled = isLoading;
+  loginBtn.textContent = isLoading ? "Accesso..." : "Log in";
 }
 
 function updateRevisionStamp() {
@@ -1088,31 +1064,41 @@ async function signIn() {
     setStatus("Inserisci una email valida.", "error");
     return;
   }
-  if (loginCooldownUntil && Date.now() < loginCooldownUntil) {
-    const remaining = Math.ceil((loginCooldownUntil - Date.now()) / 1000);
-    setStatus(`Attendi ${remaining}s prima di inviare un nuovo link.`, "error");
+  const password = passwordInput ? passwordInput.value : "";
+  if (!password) {
+    setStatus("Inserisci la password.", "error");
     return;
   }
   setAuthLoading(true);
-  const { error } = await supabase.auth.signInWithOtp({
+  const { error } = await supabase.auth.signInWithPassword({
     email,
-    options: {
-      emailRedirectTo: window.location.href,
-    },
+    password,
   });
   if (error) {
     setAuthLoading(false);
-    if (String(error.status) === "429") {
-      setStatus("Troppe richieste. Attendi 60 secondi e riprova.", "error");
-      setLoginCooldown(60);
-      return;
-    }
     setStatus(`Errore login: ${error.message}`, "error");
     return;
   }
   setAuthLoading(false);
-  setStatus("Ti ho inviato un link di accesso via email.", "ok");
-  setLoginCooldown(60);
+  setStatus("Accesso effettuato.", "ok");
+}
+
+async function resetPassword() {
+  const email = emailInput.value.trim();
+  if (!email) {
+    setStatus("Inserisci una email valida.", "error");
+    return;
+  }
+  setAuthLoading(true);
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: "https://alessenex.github.io/DATABASE_COMMESSE/",
+  });
+  setAuthLoading(false);
+  if (error) {
+    setStatus(`Errore reset: ${error.message}`, "error");
+    return;
+  }
+  setStatus("Ti ho inviato il link per reimpostare la password.", "ok");
 }
 
 async function signOut() {
@@ -3361,6 +3347,9 @@ async function init() {
 
 loginBtn.addEventListener("click", signIn);
 logoutBtn.addEventListener("click", signOut);
+if (resetPasswordBtn) {
+  resetPasswordBtn.addEventListener("click", resetPassword);
+}
 searchInput.addEventListener("input", applyFilters);
 yearFilter.addEventListener("change", applyFilters);
 statusFilter.addEventListener("change", applyFilters);

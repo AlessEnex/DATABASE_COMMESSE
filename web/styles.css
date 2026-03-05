@@ -104,7 +104,9 @@ body {
 }
 
 .auth-actions.is-authenticated #emailInput,
-.auth-actions.is-authenticated #loginBtn {
+.auth-actions.is-authenticated #passwordInput,
+.auth-actions.is-authenticated #loginBtn,
+.auth-actions.is-authenticated #resetPasswordBtn {
   display: none;
 }
 
