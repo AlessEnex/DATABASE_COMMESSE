@@ -1223,6 +1223,23 @@ button {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border-top: 2px solid #ffffff;
+  position: sticky;
+}
+
+.matrix-header-row .matrix-cell {
+  min-height: 44px;
+  padding: 4px 6px;
+}
+
+.matrix-header-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(-1 * (var(--matrix-panel-header-height, 64px) + 48px));
+  height: calc(var(--matrix-panel-header-height, 64px) + 48px);
+  background: #ffffff;
+  pointer-events: none;
 }
 
 .matrix-row:last-child {
@@ -1301,11 +1318,12 @@ button {
 .matrix-header {
   background: #f4f7fb;
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
   align-items: center;
   justify-content: center;
   text-align: center;
+  padding: 4px 6px;
 }
 
 .matrix-resource {
@@ -1433,8 +1451,8 @@ button {
 }
 
 .matrix-trash {
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 46px;
   border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;
@@ -1447,12 +1465,12 @@ button {
 }
 
 .matrix-trash svg {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: block;
   stroke: currentColor;
   fill: none;
-  stroke-width: 2.2;
+  stroke-width: 2.4;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1612,4 +1630,15 @@ button {
   margin: -16px -16px 0 -16px;
   padding-left: 16px;
   padding-right: 16px;
+}
+
+.matrix-panel .panel-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -24px;
+  height: 24px;
+  background: #ffffff;
+  pointer-events: none;
 }
