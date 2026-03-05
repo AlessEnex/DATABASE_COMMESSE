@@ -179,6 +179,12 @@ body {
   font-weight: 600;
 }
 
+.revision-stamp {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
 .form-warning {
   color: #b23b3b;
   font-size: 12px;

@@ -23,12 +23,41 @@ const el = (id) => document.getElementById(id);
 const authStatus = el("authStatus");
 const roleBadge = el("roleBadge");
 const statusMsg = el("statusMsg");
+const revisionStamp = el("revisionStamp");
 
 const emailInput = el("emailInput");
 const loginBtn = el("loginBtn");
 const logoutBtn = el("logoutBtn");
 const authActions = el("authActions");
 const authDot = el("authDot");
+
+let loginCooldownTimer = null;
+let loginCooldownUntil = 0;
+
+function setLoginCooldown(seconds) {
+  if (!loginBtn) return;
+  if (loginCooldownTimer) {
+    clearInterval(loginCooldownTimer);
+    loginCooldownTimer = null;
+  }
+  loginCooldownUntil = Date.now() + seconds * 1000;
+  loginBtn.disabled = true;
+  const tick = () => {
+    const remaining = Math.max(0, Math.ceil((loginCooldownUntil - Date.now()) / 1000));
+    if (remaining <= 0) {
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Invia link";
+      if (loginCooldownTimer) {
+        clearInterval(loginCooldownTimer);
+        loginCooldownTimer = null;
+      }
+      return;
+    }
+    loginBtn.textContent = `Attendi ${remaining}s`;
+  };
+  tick();
+  loginCooldownTimer = setInterval(tick, 1000);
+}
 
 const commesseList = el("commesseList");
 const searchInput = el("searchInput");
@@ -1010,6 +1039,22 @@ function setAuthLoading(isLoading) {
   loginBtn.textContent = isLoading ? "Invio..." : "Invia link";
 }
 
+function updateRevisionStamp() {
+  if (!revisionStamp) return;
+  const raw = document.lastModified;
+  if (!raw) return;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return;
+  const formatted = date.toLocaleString("it-IT", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  revisionStamp.textContent = `Revisione: ${formatted}`;
+}
+
 function setRoleBadge(text) {
   if (!text) {
     roleBadge.classList.add("hidden");
@@ -1043,6 +1088,11 @@ async function signIn() {
     setStatus("Inserisci una email valida.", "error");
     return;
   }
+  if (loginCooldownUntil && Date.now() < loginCooldownUntil) {
+    const remaining = Math.ceil((loginCooldownUntil - Date.now()) / 1000);
+    setStatus(`Attendi ${remaining}s prima di inviare un nuovo link.`, "error");
+    return;
+  }
   setAuthLoading(true);
   const { error } = await supabase.auth.signInWithOtp({
     email,
@@ -1052,11 +1102,17 @@ async function signIn() {
   });
   if (error) {
     setAuthLoading(false);
+    if (String(error.status) === "429") {
+      setStatus("Troppe richieste. Attendi 60 secondi e riprova.", "error");
+      setLoginCooldown(60);
+      return;
+    }
     setStatus(`Errore login: ${error.message}`, "error");
     return;
   }
   setAuthLoading(false);
   setStatus("Ti ho inviato un link di accesso via email.", "ok");
+  setLoginCooldown(60);
 }
 
 async function signOut() {
@@ -3780,6 +3836,7 @@ supabase.auth.onAuthStateChange(async (_event, session) => {
 });
 
 init();
+updateRevisionStamp();
 
 })();
 
