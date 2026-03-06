@@ -1126,17 +1126,40 @@ async function signIn() {
     return;
   }
   setAuthLoading(true);
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-  if (error) {
+  try {
+    let error = null;
+    try {
+      const result = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      error = result.error;
+    } catch (innerErr) {
+      if (String(innerErr?.name || "") === "AbortError") {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const retry = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        error = retry.error;
+      } else {
+        throw innerErr;
+      }
+    }
+    if (error) {
+      setStatus(`Errore login: ${error.message}`, "error");
+      return;
+    }
+    setStatus("Accesso effettuato.", "ok");
+  } catch (err) {
+    if (String(err?.name || "") === "AbortError") {
+      setStatus("Accesso bloccato da un lock. Ricarica la pagina e riprova.", "error");
+    } else {
+      setStatus("Errore login inatteso. Riprova.", "error");
+    }
+  } finally {
     setAuthLoading(false);
-    setStatus(`Errore login: ${error.message}`, "error");
-    return;
   }
-  setAuthLoading(false);
-  setStatus("Accesso effettuato.", "ok");
 }
 
 async function resetPassword() {
