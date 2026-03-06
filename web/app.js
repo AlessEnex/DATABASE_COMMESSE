@@ -4,8 +4,14 @@
 
 const SUPABASE_URL = "https://bsceqirconhqmxwipbyl.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_zE9Cz_GnZIRluKPkr41RxA_EqCZxVgp";
+const AUTH_STORAGE_KEY = "sb-bsceqirconhqmxwipbyl-auth-token";
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
 
 const state = {
   session: null,
@@ -33,6 +39,23 @@ const authActions = el("authActions");
 const authDot = el("authDot");
 const resetPasswordBtn = el("resetPasswordBtn");
 const resetPasswordFeedback = el("resetPasswordFeedback");
+
+const DEBUG_AUTH = new URLSearchParams(window.location.search).get("debug") === "1";
+let debugPanel = null;
+const debugLog = (message) => {
+  if (!DEBUG_AUTH) return;
+  if (!debugPanel) {
+    debugPanel = document.createElement("div");
+    debugPanel.className = "debug-panel";
+    document.body.appendChild(debugPanel);
+  }
+  const time = new Date().toLocaleTimeString("it-IT", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  debugPanel.textContent = `[${time}] ${message}\n` + debugPanel.textContent;
+};
 
 const RESET_COOLDOWN_MS = 60_000;
 const RESET_COOLDOWN_KEY = "commesse_reset_cooldown_until";
@@ -1057,10 +1080,133 @@ function setStatus(message, type = "info") {
   statusMsg.classList.remove("ok", "error");
   if (type === "ok") statusMsg.classList.add("ok");
   if (type === "error") statusMsg.classList.add("error");
+  statusMsg.classList.remove("hidden");
   if (statusTimer) clearTimeout(statusTimer);
   statusTimer = setTimeout(() => {
     statusMsg.classList.remove("ok", "error");
+    statusMsg.classList.add("hidden");
   }, 4000);
+}
+
+const withTimeout = (promise, ms) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+
+const getStoredAuth = () => {
+  const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+async function safeSetSession(accessToken, refreshToken, userFallback = null) {
+  let error = null;
+  let session = null;
+  try {
+    const result = await withTimeout(
+      supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken }),
+      8000
+    );
+    error = result.error;
+    session = result.data?.session || null;
+  } catch (err) {
+    if (String(err?.name || "") === "AbortError") {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        const retry = await withTimeout(
+          supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken }),
+          8000
+        );
+        error = retry.error;
+        session = retry.data?.session || null;
+      } catch (retryErr) {
+        error = retryErr;
+      }
+    } else {
+      error = err;
+    }
+  }
+  if (error) {
+    setStatus("Impossibile inizializzare la sessione. Ricarica la pagina.", "error");
+    return null;
+  }
+  if (!session && accessToken && refreshToken) {
+    session = { access_token: accessToken, refresh_token: refreshToken, user: userFallback };
+  }
+  return session;
+}
+
+async function ensureSessionFromStorage() {
+  const stored = getStoredAuth();
+  if (!stored?.access_token || !stored?.refresh_token) return null;
+  return await safeSetSession(stored.access_token, stored.refresh_token, stored.user || null);
+}
+
+let authSyncInProgress = false;
+async function syncSignedIn(session) {
+  if (!session || authSyncInProgress) return;
+  authSyncInProgress = true;
+  state.session = session;
+  debugLog(`syncSignedIn start: user=${session.user?.id || "n/a"}`);
+  try {
+    debugLog("syncSignedIn step: loadProfile");
+    const ok = await loadProfile(session.user);
+    if (!ok || !state.profile) {
+      syncSignedOut();
+      return;
+    }
+    debugLog("syncSignedIn step: loadReparti");
+    await loadReparti();
+    debugLog("syncSignedIn step: loadRisorse");
+    await loadRisorse();
+    debugLog("syncSignedIn step: loadCommesse");
+    await loadCommesse();
+    calendarDate.value = formatDateInput(calendarState.date);
+    debugLog("syncSignedIn step: loadAttivita");
+    await loadAttivita();
+    matrixDate.value = formatDateInput(matrixState.date);
+    debugLog("syncSignedIn step: loadMatrixAttivita");
+    await loadMatrixAttivita();
+    debugLog("syncSignedIn step: setupRealtime");
+    await setupRealtime();
+    debugLog("syncSignedIn complete");
+  } catch (err) {
+    debugLog(`syncSignedIn error: ${err?.message || err}`);
+    setStatus(`Errore sync login: ${err?.message || err}`, "error");
+  } finally {
+    authSyncInProgress = false;
+  }
+}
+
+function syncSignedOut() {
+  debugLog("syncSignedOut");
+  state.session = null;
+  state.profile = null;
+  state.commesse = [];
+  authStatus.textContent = "Non autenticato";
+  logoutBtn.classList.add("hidden");
+  if (authActions) authActions.classList.remove("is-authenticated");
+  if (authDot) authDot.classList.add("hidden");
+  setRoleBadge("");
+  setWriteAccess(false);
+  commesseList.innerHTML = "";
+  clearSelection();
+  calendarGrid.innerHTML = "";
+  matrixGrid.innerHTML = "";
+  setStatus("Sessione terminata.");
 }
 
 function setAuthLoading(isLoading) {
@@ -1126,32 +1272,65 @@ async function signIn() {
     return;
   }
   setAuthLoading(true);
+  debugLog("signIn start");
   try {
     let error = null;
+    let session = null;
     try {
-      const result = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const result = await withTimeout(
+        supabase.auth.signInWithPassword({
+          email,
+          password,
+        }),
+        8000
+      );
       error = result.error;
+      session = result.data?.session || null;
     } catch (innerErr) {
       if (String(innerErr?.name || "") === "AbortError") {
         await new Promise((resolve) => setTimeout(resolve, 300));
-        const retry = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        const retry = await withTimeout(
+          supabase.auth.signInWithPassword({
+            email,
+            password,
+          }),
+          8000
+        );
         error = retry.error;
+        session = retry.data?.session || null;
+      } else if (String(innerErr?.message || "") === "timeout") {
+        debugLog("signIn timeout");
+        setStatus(
+          "Login in attesa. Chiudi altre schede aperte dell'app, poi ricarica la pagina.",
+          "error"
+        );
+        return;
       } else {
         throw innerErr;
       }
     }
     if (error) {
+      debugLog(`signIn error: ${error.message}`);
       setStatus(`Errore login: ${error.message}`, "error");
       return;
     }
     setStatus("Accesso effettuato.", "ok");
+    if (!session) {
+      const { data } = await supabase.auth.getSession();
+      session = data?.session || null;
+    }
+    if (!session) {
+      session = await ensureSessionFromStorage();
+    }
+    if (session) {
+      debugLog("signIn session ready");
+      await syncSignedIn(session);
+      return;
+    }
+    debugLog("signIn session missing");
+    setStatus("Login effettuato ma sessione non disponibile. Ricarica la pagina.", "error");
   } catch (err) {
+    debugLog(`signIn fatal: ${err?.message || err}`);
     if (String(err?.name || "") === "AbortError") {
       setStatus("Accesso bloccato da un lock. Ricarica la pagina e riprova.", "error");
     } else {
@@ -2396,30 +2575,106 @@ function selectCommessa(id, options = {}) {
   if (options.openModal) openCommessaDetailModal();
 }
 
-async function loadProfile() {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return;
-
-  const { data, error } = await supabase.from("utenti").select("*").eq("id", user.id).single();
-  if (error) {
-    setStatus("Accesso negato: non sei in whitelist o profilo non creato.", "error");
-    return;
+const fetchProfileViaRest = async (userId) => {
+  const stored = getStoredAuth();
+  const token = stored?.access_token;
+  if (!token) return null;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/utenti?id=eq.${userId}&select=*`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    debugLog(`loadProfile REST error: ${res.status}`);
+    return null;
   }
+  const data = await res.json();
+  return Array.isArray(data) ? data[0] || null : null;
+};
+
+const fetchTableViaRest = async (table, query = "") => {
+  const stored = getStoredAuth();
+  const token = stored?.access_token;
+  if (!token) return null;
+  const url = `${SUPABASE_URL}/rest/v1/${table}?${query}`;
+  const res = await fetch(url, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    debugLog(`REST ${table} error: ${res.status}`);
+    return null;
+  }
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+};
+
+async function loadProfile(userFromSession = null) {
+  let user = userFromSession;
+  if (!user) {
+    const {
+      data: { user: fetchedUser },
+    } = await supabase.auth.getUser();
+    user = fetchedUser;
+  }
+  if (!user) return false;
+
+  debugLog(`loadProfile query: ${user.id}`);
+  let data = null;
+  let error = null;
+  try {
+    const result = await withTimeout(
+      supabase.from("utenti").select("*").eq("id", user.id).single(),
+      6000
+    );
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    debugLog(`loadProfile timeout: ${err?.message || err}`);
+  }
+
+  if (!data || error) {
+    debugLog("loadProfile fallback REST");
+    data = await fetchProfileViaRest(user.id);
+  }
+
+  if (!data) {
+    debugLog(`loadProfile error: ${error?.message || "no data"}`);
+    setStatus("Accesso negato: non sei in whitelist o profilo non creato.", "error");
+    return false;
+  }
+
   state.profile = data;
+  debugLog(`loadProfile ok: ${data.email || data.id}`);
   setRoleBadge(data.ruolo);
   setWriteAccess(data.ruolo !== "viewer");
   authStatus.textContent = `Connesso come ${data.email}`;
   logoutBtn.classList.remove("hidden");
   if (authActions) authActions.classList.add("is-authenticated");
   if (authDot) authDot.classList.remove("hidden");
+  return true;
 }
 
 async function loadReparti() {
-  const { data, error } = await supabase.from("reparti").select("*").order("nome");
-  if (error) {
-    setStatus(`Errore reparti: ${error.message}`, "error");
+  debugLog("loadReparti query");
+  let data = null;
+  let error = null;
+  try {
+    const result = await withTimeout(supabase.from("reparti").select("*").order("nome"), 6000);
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    debugLog(`loadReparti timeout: ${err?.message || err}`);
+  }
+  if (!data || error) {
+    debugLog("loadReparti fallback REST");
+    data = await fetchTableViaRest("reparti", "select=*&order=nome.asc");
+  }
+  if (!data) {
+    setStatus(`Errore reparti: ${error?.message || "no data"}`, "error");
     return;
   }
   state.reparti = data || [];
@@ -2430,9 +2685,22 @@ async function loadReparti() {
 }
 
 async function loadRisorse() {
-  const { data, error } = await supabase.from("risorse").select("*").order("nome");
-  if (error) {
-    setStatus(`Errore risorse: ${error.message}`, "error");
+  debugLog("loadRisorse query");
+  let data = null;
+  let error = null;
+  try {
+    const result = await withTimeout(supabase.from("risorse").select("*").order("nome"), 6000);
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    debugLog(`loadRisorse timeout: ${err?.message || err}`);
+  }
+  if (!data || error) {
+    debugLog("loadRisorse fallback REST");
+    data = await fetchTableViaRest("risorse", "select=*&order=nome.asc");
+  }
+  if (!data) {
+    setStatus(`Errore risorse: ${error?.message || "no data"}`, "error");
     return;
   }
   state.risorse = data || [];
@@ -2443,11 +2711,25 @@ async function loadRisorse() {
 }
 
 async function loadCommesse() {
-  const { data, error } = await supabase.from("v_commesse").select("*").order("created_at", {
-    ascending: false,
-  });
-  if (error) {
-    setStatus(`Errore commesse: ${error.message}`, "error");
+  debugLog("loadCommesse query");
+  let data = null;
+  let error = null;
+  try {
+    const result = await withTimeout(
+      supabase.from("v_commesse").select("*").order("created_at", { ascending: false }),
+      6000
+    );
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    debugLog(`loadCommesse timeout: ${err?.message || err}`);
+  }
+  if (!data || error) {
+    debugLog("loadCommesse fallback REST");
+    data = await fetchTableViaRest("v_commesse", "select=*&order=created_at.desc");
+  }
+  if (!data) {
+    setStatus(`Errore commesse: ${error?.message || "no data"}`, "error");
     return;
   }
   state.commesse = data || [];
@@ -3083,6 +3365,7 @@ function renderMatrixReport() {
 
 async function loadMatrixAttivita() {
   if (!state.session) return;
+  debugLog("loadMatrixAttivita query");
   const start = startOfWeek(matrixState.date);
   const end = matrixState.view === "six"
     ? endOfDay(addDays(start, 41))
@@ -3091,23 +3374,47 @@ async function loadMatrixAttivita() {
     : matrixState.view === "two"
     ? endOfDay(addDays(start, 13))
     : endOfDay(addDays(start, 6));
-  const { data, error } = await supabase
-    .from("attivita")
-    .select("*")
-    .lte("data_inizio", end.toISOString())
-    .gte("data_fine", start.toISOString())
-    .order("data_inizio", { ascending: true });
-  if (error) {
-    setStatus(`Errore matrice: ${error.message}`, "error");
-    return;
+  let data = null;
+  let error = null;
+  try {
+    const result = await withTimeout(
+      supabase
+        .from("attivita")
+        .select("*")
+        .lte("data_inizio", end.toISOString())
+        .gte("data_fine", start.toISOString())
+        .order("data_inizio", { ascending: true }),
+      6000
+    );
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    debugLog(`loadMatrixAttivita timeout: ${err?.message || err}`);
   }
-  matrixState.attivita = data || [];
+  if (error || !data) {
+    debugLog("loadMatrixAttivita fallback REST");
+    const query = [
+      "select=*",
+      `data_inizio=lte.${encodeURIComponent(end.toISOString())}`,
+      `data_fine=gte.${encodeURIComponent(start.toISOString())}`,
+      "order=data_inizio.asc",
+    ].join("&");
+    const rest = await fetchTableViaRest("attivita", query);
+    if (!rest) {
+      setStatus(`Errore matrice: ${error?.message || "no data"}`, "error");
+      return;
+    }
+    matrixState.attivita = rest || [];
+  } else {
+    matrixState.attivita = data || [];
+  }
   renderMatrix();
   renderMatrixReport();
 }
 
 async function loadAttivita() {
   if (!state.session) return;
+  debugLog("loadAttivita query");
   const view = calendarState.view;
   const baseDate = calendarState.date;
   let start;
@@ -3121,18 +3428,41 @@ async function loadAttivita() {
     end = endOfDay(addDays(start, 6));
   }
 
-  const { data, error } = await supabase
-    .from("attivita")
-    .select("*")
-    .lte("data_inizio", end.toISOString())
-    .gte("data_fine", start.toISOString())
-    .order("data_inizio", { ascending: true });
-
-  if (error) {
-    setStatus(`Errore attivita: ${error.message}`, "error");
-    return;
+  let data = null;
+  let error = null;
+  try {
+    const result = await withTimeout(
+      supabase
+        .from("attivita")
+        .select("*")
+        .lte("data_inizio", end.toISOString())
+        .gte("data_fine", start.toISOString())
+        .order("data_inizio", { ascending: true }),
+      6000
+    );
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    debugLog(`loadAttivita timeout: ${err?.message || err}`);
   }
-  calendarState.attivita = data || [];
+
+  if (error || !data) {
+    debugLog("loadAttivita fallback REST");
+    const query = [
+      "select=*",
+      `data_inizio=lte.${encodeURIComponent(end.toISOString())}`,
+      `data_fine=gte.${encodeURIComponent(start.toISOString())}`,
+      "order=data_inizio.asc",
+    ].join("&");
+    const rest = await fetchTableViaRest("attivita", query);
+    if (!rest) {
+      setStatus(`Errore attivita: ${error?.message || "no data"}`, "error");
+      return;
+    }
+    calendarState.attivita = rest || [];
+  } else {
+    calendarState.attivita = data || [];
+  }
   renderCalendar(start, end);
 }
 
@@ -3423,18 +3753,18 @@ async function init() {
   state.session = data.session;
 
   if (state.session) {
-    await loadProfile();
-    await loadReparti();
-    await loadRisorse();
-    await loadCommesse();
-    calendarDate.value = formatDateInput(calendarState.date);
-    await loadAttivita();
-    matrixDate.value = formatDateInput(matrixState.date);
-    await loadMatrixAttivita();
-    await setupRealtime();
-  } else {
-    setStatus("");
+    debugLog("init: session found");
+    await syncSignedIn(state.session);
+    return;
   }
+  const storedSession = await ensureSessionFromStorage();
+  if (storedSession) {
+    debugLog("init: session from storage");
+    await syncSignedIn(storedSession);
+    return;
+  }
+  debugLog("init: no session");
+  setStatus("");
 }
 
 loginBtn.addEventListener("click", signIn);
@@ -3889,32 +4219,12 @@ document.addEventListener("click", (e) => {
 setMatrixColorMode("commessa");
 setMatrixAutoShift(false);
 
-supabase.auth.onAuthStateChange(async (_event, session) => {
-  state.session = session;
+supabase.auth.onAuthStateChange(async (event, session) => {
+  debugLog(`auth event: ${event} session=${session ? "yes" : "no"}`);
   if (session) {
-    await loadProfile();
-    await loadReparti();
-    await loadRisorse();
-    await loadCommesse();
-    calendarDate.value = formatDateInput(calendarState.date);
-    await loadAttivita();
-    matrixDate.value = formatDateInput(matrixState.date);
-    await loadMatrixAttivita();
-    await setupRealtime();
+    await syncSignedIn(session);
   } else {
-    state.profile = null;
-    state.commesse = [];
-    authStatus.textContent = "Non autenticato";
-    logoutBtn.classList.add("hidden");
-    if (authActions) authActions.classList.remove("is-authenticated");
-    if (authDot) authDot.classList.add("hidden");
-    setRoleBadge("");
-    setWriteAccess(false);
-    commesseList.innerHTML = "";
-    clearSelection();
-    calendarGrid.innerHTML = "";
-    matrixGrid.innerHTML = "";
-    setStatus("Sessione terminata.");
+    syncSignedOut();
   }
 });
 

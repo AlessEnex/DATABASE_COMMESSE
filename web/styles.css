@@ -433,6 +433,27 @@ button {
   border: 1px solid var(--primary);
 }
 
+.debug-panel {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  width: min(420px, 92vw);
+  max-height: 40vh;
+  overflow: auto;
+  background: rgba(16, 22, 32, 0.92);
+  color: #e6eefc;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 28px rgba(10, 16, 24, 0.35);
+  z-index: 999;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 .danger {
   background: var(--danger);
   color: #fff;
