@@ -1092,7 +1092,7 @@ async function resetPassword() {
   }
   setAuthLoading(true);
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: "https://alessenex.github.io/DATABASE_COMMESSE/",
+    redirectTo: "https://alessenex.github.io/DATABASE_COMMESSE/reset.html",
   });
   setAuthLoading(false);
   if (error) {

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reset Password | Commesse Live</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">CL</div>
+          <div>
+            <div class="title">Commesse Live</div>
+            <div class="subtitle">Reset your password</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="topbar-actions">
+            <div id="resetStatus" class="status-msg"></div>
+          </div>
+        </div>
+      </header>
+
+      <main class="reset-layout">
+        <section class="modal-card reset-card">
+          <div class="modal-header">
+            <h3>Choose a new password</h3>
+          </div>
+          <p class="modal-hint">
+            This link is valid for a short time. If it expired, request a new reset email.
+          </p>
+          <form id="resetForm" class="form">
+            <label>
+              New password
+              <input id="newPassword" type="password" autocomplete="new-password" />
+            </label>
+            <label>
+              Confirm password
+              <input id="confirmPassword" type="password" autocomplete="new-password" />
+            </label>
+            <div class="actions reset-actions">
+              <a class="reset-back" href="./">Back to login</a>
+              <button id="resetSubmit" class="primary" type="submit">Update password</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="reset.js"></script>
+  </body>
+</html>

@@ -470,6 +470,31 @@ button {
   width: min(1200px, 98vw);
 }
 
+.reset-layout {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0 60px;
+}
+
+.reset-card {
+  width: min(560px, 100%);
+}
+
+.reset-actions {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.reset-back {
+  color: var(--primary);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.reset-back:hover {
+  text-decoration: underline;
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;
