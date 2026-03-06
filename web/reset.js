@@ -2,7 +2,12 @@
   const SUPABASE_URL = "https://bsceqirconhqmxwipbyl.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_zE9Cz_GnZIRluKPkr41RxA_EqCZxVgp";
 
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      detectSessionInUrl: false,
+      persistSession: true,
+    },
+  });
 
   const resetStatus = document.getElementById("resetStatus");
   const resetForm = document.getElementById("resetForm");
@@ -40,10 +45,29 @@
       return false;
     }
 
-    const { error } = await supabase.auth.setSession({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
+    let error = null;
+    try {
+      const result = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+      error = result.error;
+    } catch (err) {
+      if (String(err?.name || "") === "AbortError") {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        try {
+          const retry = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          error = retry.error;
+        } catch (retryErr) {
+          error = retryErr;
+        }
+      } else {
+        error = err;
+      }
+    }
 
     if (error) {
       setStatus("Invalid or expired reset link.", "error");

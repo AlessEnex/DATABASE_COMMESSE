@@ -34,6 +34,61 @@ const authDot = el("authDot");
 const resetPasswordBtn = el("resetPasswordBtn");
 const resetPasswordFeedback = el("resetPasswordFeedback");
 
+const RESET_COOLDOWN_MS = 60_000;
+const RESET_COOLDOWN_KEY = "commesse_reset_cooldown_until";
+
+let resetCooldownTimer = null;
+
+const setResetFeedback = (message, tone = "") => {
+  if (!resetPasswordFeedback) return;
+  resetPasswordFeedback.textContent = message;
+  resetPasswordFeedback.classList.remove("hidden", "error");
+  if (tone === "error") resetPasswordFeedback.classList.add("error");
+  resetPasswordFeedback.classList.remove("hidden");
+};
+
+const getResetCooldownUntil = () => {
+  const raw = localStorage.getItem(RESET_COOLDOWN_KEY);
+  const value = raw ? Number(raw) : 0;
+  return Number.isFinite(value) ? value : 0;
+};
+
+const setResetCooldownUntil = (timestamp) => {
+  localStorage.setItem(RESET_COOLDOWN_KEY, String(timestamp));
+};
+
+const clearResetCooldown = () => {
+  localStorage.removeItem(RESET_COOLDOWN_KEY);
+};
+
+const updateResetCooldownUI = (showMessage = false) => {
+  if (!resetPasswordBtn) return;
+  const now = Date.now();
+  const until = getResetCooldownUntil();
+  const remaining = Math.max(0, until - now);
+
+  if (remaining <= 0) {
+    if (resetCooldownTimer) {
+      clearInterval(resetCooldownTimer);
+      resetCooldownTimer = null;
+    }
+    resetPasswordBtn.disabled = false;
+    if (resetPasswordFeedback && resetPasswordFeedback.textContent.includes("Riprova tra")) {
+      resetPasswordFeedback.classList.add("hidden");
+    }
+    return;
+  }
+
+  resetPasswordBtn.disabled = true;
+  const seconds = Math.ceil(remaining / 1000);
+  if (showMessage) {
+    setResetFeedback(`Hai già richiesto un reset. Riprova tra ${seconds}s.`, "error");
+  }
+  if (!resetCooldownTimer) {
+    resetCooldownTimer = setInterval(() => updateResetCooldownUI(false), 1000);
+  }
+};
+
 const commesseList = el("commesseList");
 const searchInput = el("searchInput");
 const yearFilter = el("yearFilter");
@@ -1090,24 +1145,29 @@ async function resetPassword() {
     setStatus("Inserisci una email valida.", "error");
     return;
   }
+  updateResetCooldownUI(true);
+  if (resetPasswordBtn && resetPasswordBtn.disabled) return;
   setAuthLoading(true);
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: "https://alessenex.github.io/DATABASE_COMMESSE/reset.html",
   });
   setAuthLoading(false);
   if (error) {
-    if (resetPasswordFeedback) {
-      resetPasswordFeedback.textContent = `Errore reset: ${error.message}`;
-      resetPasswordFeedback.classList.remove("hidden");
-      resetPasswordFeedback.classList.add("error");
+    const msg = String(error.message || "");
+    if (msg.toLowerCase().includes("rate limit")) {
+      setResetFeedback("Hai raggiunto il limite di richieste. Attendi qualche minuto e riprova.", "error");
+    } else {
+      setResetFeedback(`Errore reset: ${error.message}`, "error");
     }
     return;
   }
-  if (resetPasswordFeedback) {
-    resetPasswordFeedback.textContent = "Ti ho inviato il link per reimpostare la password.";
-    resetPasswordFeedback.classList.remove("hidden");
-    resetPasswordFeedback.classList.remove("error");
-  }
+  const cooldownUntil = Date.now() + RESET_COOLDOWN_MS;
+  setResetCooldownUntil(cooldownUntil);
+  setResetFeedback(
+    "Ti ho inviato il link per reimpostare la password. Controlla la posta.",
+    ""
+  );
+  updateResetCooldownUI(false);
 }
 
 async function signOut() {
@@ -3359,6 +3419,8 @@ logoutBtn.addEventListener("click", signOut);
 if (resetPasswordBtn) {
   resetPasswordBtn.addEventListener("click", resetPassword);
 }
+
+updateResetCooldownUI();
 searchInput.addEventListener("input", applyFilters);
 yearFilter.addEventListener("change", applyFilters);
 statusFilter.addEventListener("change", applyFilters);
