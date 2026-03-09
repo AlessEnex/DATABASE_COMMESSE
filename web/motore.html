@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Motore - Commesse Live</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="motore.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
+  </head>
+  <body class="motore-body motore-locked">
+    <div class="app motore-app">
+      <header class="topbar motore-topbar">
+        <div class="brand">
+          <div class="logo">CL</div>
+          <div>
+            <div class="title">Motore Pianificazione</div>
+            <div class="subtitle">No-code per regole e simulazioni</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <a class="ghost motore-link" href="index.html">Torna alla app</a>
+        </div>
+      </header>
+
+      <main class="motore-layout">
+        <section class="motore-panel">
+          <div class="motore-panel-header">
+            <h2>Libreria</h2>
+            <button class="ghost" type="button">Nuovo tipo</button>
+          </div>
+          <div class="motore-section">
+            <div class="motore-section-title">Tipi macchina</div>
+            <div id="motoreMachineList" class="motore-list"></div>
+          </div>
+          <div class="motore-section">
+            <div class="motore-section-title">Set di regole</div>
+            <div class="motore-list muted">
+              <div class="motore-list-item">Standard produzione</div>
+              <div class="motore-list-item">Rush consegna</div>
+              <div class="motore-list-item">Cliente premium</div>
+            </div>
+          </div>
+          <div class="motore-section">
+            <div class="motore-section-title">Template attivita</div>
+            <div class="motore-tags">
+              <span class="tag cad">CAD</span>
+              <span class="tag thermo">Termodinamici</span>
+              <span class="tag elec">Elettrici</span>
+              <span class="tag">Documentazione</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="motore-panel motore-editor">
+          <div class="motore-panel-header">
+            <div>
+              <h2 id="motoreRuleTitle">Regola: Elba</h2>
+              <div class="motore-subtitle">Versione 1.0 - bozza</div>
+            </div>
+            <div class="motore-actions">
+              <button class="ghost" type="button">Duplica</button>
+              <button id="motoreSaveBtn" class="primary" type="button">Salva bozza</button>
+            </div>
+          </div>
+
+          <div class="motore-grid">
+            <div class="motore-block">
+              <div class="motore-block-title">Timeline logica</div>
+              <div id="motoreRuleList" class="motore-rule-list"></div>
+              <div id="motoreRuleWarnings" class="motore-rule-warnings hidden"></div>
+              <button class="ghost full" type="button">+ Aggiungi attivita</button>
+            </div>
+
+            <div class="motore-block">
+              <div class="motore-block-title">Milestone</div>
+              <div class="motore-milestone">
+                <div class="motore-milestone-row">
+                  <span>Ordine telaio</span>
+                  <span class="motore-pill">T</span>
+                  <span class="muted">vincolo forte</span>
+                </div>
+                <div class="motore-milestone-row">
+                  <span>Consegna macchina</span>
+                  <span class="motore-pill">C</span>
+                  <span class="muted">vincolo forte</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="motore-block">
+              <div class="motore-block-title">Parametri</div>
+              <div class="motore-fields">
+                <label>
+                  Buffer standard (gg)
+                  <input type="number" value="2" />
+                </label>
+                <label>
+                  Priorita base
+                  <select>
+                    <option>Media</option>
+                    <option>Alta</option>
+                    <option>Critica</option>
+                  </select>
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" checked />
+                  <span>Blocca sovrapposizioni reparto</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="motore-panel motore-sim">
+          <div class="motore-panel-header">
+            <h2>Simulazione</h2>
+            <button class="ghost" type="button">Reset</button>
+          </div>
+          <div class="motore-block">
+            <div class="motore-block-title">Input rapido</div>
+            <div class="motore-fields">
+              <label>
+                Commessa
+                <input type="text" placeholder="2026_099" />
+              </label>
+              <label>
+                Tipo macchina
+                <select id="motoreMachineSelect"></select>
+              </label>
+              <label>
+                Ordine telaio
+                <input type="date" />
+              </label>
+              <label>
+                Consegna macchina
+                <input type="date" />
+              </label>
+            </div>
+            <button class="primary full" type="button">Simula piano</button>
+          </div>
+
+          <div class="motore-block">
+            <div class="motore-block-title">Output</div>
+            <div id="motoreOutput" class="motore-output">
+              <div class="motore-output-item ok">Timeline coerente con i vincoli.</div>
+              <div class="motore-output-item warn">CAD ha un picco di carico.</div>
+              <div class="motore-output-item warn">Termodinamici in overlapping.</div>
+            </div>
+          </div>
+
+          <div class="motore-block">
+            <div class="motore-block-title">Azioni</div>
+            <button class="primary full" type="button" disabled>Applica al piano</button>
+            <div class="motore-hint muted">
+              Attiva l'applicazione solo dopo la validazione del responsabile.
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="motoreAccessGate" class="motore-gate hidden">
+      <div class="motore-gate-card">
+        <h2 id="motoreGateTitle">Accesso richiesto</h2>
+        <p id="motoreGateText">Effettua il login nella app per continuare.</p>
+        <a class="ghost motore-link" href="index.html">Torna alla app</a>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="motore.js"></script>
+  </body>
+</html>

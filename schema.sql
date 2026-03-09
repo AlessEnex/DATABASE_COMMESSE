@@ -3,6 +3,7 @@
 
 -- Extensions
 create extension if not exists pgcrypto;
+create extension if not exists pg_trgm;
 
 -- Enums
 do $$
@@ -47,6 +48,9 @@ create table if not exists commesse (
   priorita text check (priorita in ('bassa', 'media', 'alta', 'critica')),
   data_ingresso date,
   data_consegna_prevista date,
+  data_ordine_telaio date,
+  telaio_consegnato boolean not null default false,
+  data_consegna_telaio_effettiva date,
   data_richiesta date,
   data_confermata date,
   ritardo text,
@@ -62,12 +66,25 @@ create table if not exists commesse (
   arrivo_kit date,
   data_prelievo date,
   data_consegna_macchina date,
+  trasporto_consegna text check (trasporto_consegna in ('van', 'ship')),
   week_ingresso_ordine smallint,
   imponibile integer,
   note_generali text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint codice_format check (codice ~ '^[0-9]{4}_[0-9]{1,3}$')
+);
+
+create table if not exists commessa_schede (
+  commessa_id uuid primary key references commesse(id) on delete cascade,
+  tipo_macchina text,
+  num_compressori_mt integer,
+  num_compressori_lt integer,
+  num_compressori_aux integer,
+  num_compressori_mt2_pdc_ac integer,
+  num_compressori_lt2 integer,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists reparti (
@@ -279,6 +296,7 @@ select
   c.arrivo_kit,
   c.data_prelievo,
   c.data_consegna_macchina,
+  c.trasporto_consegna,
   c.week_ingresso_ordine,
   c.imponibile,
   c.note_generali,
@@ -296,7 +314,10 @@ select
       order by r.nome
     ) filter (where r.id is not null),
     '[]'::jsonb
-  ) as reparti
+  ) as reparti,
+  c.data_ordine_telaio,
+  c.telaio_consegnato,
+  c.data_consegna_telaio_effettiva
 from commesse c
 left join commesse_reparti cr on cr.commessa_id = c.id
 left join reparti r on r.id = cr.reparto_id
@@ -304,11 +325,17 @@ group by c.id;
 
 -- Allow select on view (RLS still enforced by underlying tables)
 grant select on v_commesse to authenticated;
+grant select, insert, update, delete on commessa_schede to authenticated;
 
 -- Indexes
 create index if not exists idx_commesse_stato on commesse (stato);
 create index if not exists idx_commesse_date on commesse (data_ingresso, data_consegna_prevista);
+create index if not exists idx_commesse_consegna_macchina on commesse (data_consegna_macchina);
+create index if not exists idx_commesse_ordine_telaio on commesse (data_ordine_telaio);
 create index if not exists idx_commesse_anno_numero on commesse (anno, numero);
+create index if not exists idx_commesse_numero on commesse (numero);
+create index if not exists idx_commesse_anno on commesse (anno);
+create index if not exists idx_commesse_titolo_trgm on commesse using gin (titolo gin_trgm_ops);
 create index if not exists idx_commesse_reparti_stato on commesse_reparti (reparto_id, stato);
 create index if not exists idx_assegnazioni_utente on assegnazioni (utente_id);
 
@@ -316,6 +343,11 @@ create index if not exists idx_assegnazioni_utente on assegnazioni (utente_id);
 drop trigger if exists trg_commesse_updated_at on commesse;
 create trigger trg_commesse_updated_at
 before update on commesse
+for each row execute function set_updated_at();
+
+drop trigger if exists trg_commessa_schede_updated_at on commessa_schede;
+create trigger trg_commessa_schede_updated_at
+before update on commessa_schede
 for each row execute function set_updated_at();
 
 drop trigger if exists trg_commesse_reparti_updated_at on commesse_reparti;
@@ -341,6 +373,7 @@ for each row execute function handle_new_user();
 
 -- RLS (Supabase)
 alter table commesse enable row level security;
+alter table commessa_schede enable row level security;
 alter table commesse_reparti enable row level security;
 alter table reparti enable row level security;
 alter table risorse enable row level security;
@@ -360,6 +393,17 @@ create policy commesse_write on commesse
 create policy commesse_update on commesse
   for update using (can_write()) with check (can_write());
 create policy commesse_delete on commesse
+  for delete using (can_write());
+
+drop policy if exists commessa_schede_select on commessa_schede;
+create policy commessa_schede_select on commessa_schede
+  for select using (is_whitelisted_email());
+drop policy if exists commessa_schede_write on commessa_schede;
+create policy commessa_schede_write on commessa_schede
+  for insert with check (can_write());
+create policy commessa_schede_update on commessa_schede
+  for update using (can_write()) with check (can_write());
+create policy commessa_schede_delete on commessa_schede
   for delete using (can_write());
 
 drop policy if exists commesse_reparti_select on commesse_reparti;

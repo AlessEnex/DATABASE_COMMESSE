@@ -1,0 +1,429 @@
+:root {
+  --motore-bg: #f6f7fb;
+  --motore-panel: #ffffff;
+  --motore-border: #e3e7ef;
+  --motore-ink: #0f172a;
+  --motore-muted: #6b7280;
+}
+
+.motore-body {
+  background: var(--motore-bg);
+}
+
+.motore-body.motore-locked .motore-app {
+  filter: blur(6px);
+  opacity: 0.35;
+  pointer-events: none;
+  user-select: none;
+}
+
+.motore-gate {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 14, 22, 0.7);
+  z-index: 3000;
+}
+
+.motore-gate.hidden {
+  display: none;
+}
+
+.motore-gate-card {
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 16px;
+  padding: 20px 24px;
+  max-width: 420px;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(8, 12, 20, 0.4);
+}
+
+.motore-gate-card h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.motore-gate-card p {
+  margin: 0 0 14px;
+  color: #cbd5f5;
+  font-size: 13px;
+}
+
+.motore-app {
+  min-height: 100vh;
+}
+
+.motore-topbar {
+  background: #ffffff;
+  border-bottom: 1px solid var(--motore-border);
+}
+
+.motore-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+
+.motore-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  gap: 16px;
+  padding: 16px;
+}
+
+.motore-panel {
+  background: var(--motore-panel);
+  border: 1px solid var(--motore-border);
+  border-radius: 16px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.motore-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.motore-panel h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--motore-ink);
+}
+
+.motore-subtitle {
+  font-size: 12px;
+  color: var(--motore-muted);
+}
+
+.motore-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.motore-section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--motore-muted);
+  font-weight: 600;
+}
+
+.motore-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.motore-list-item {
+  border: 1px solid var(--motore-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: #fbfcff;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.motore-list-item:hover {
+  border-color: #94a3b8;
+  transform: translateY(-1px);
+}
+
+.motore-list-item.active {
+  border-color: #6366f1;
+  box-shadow: 0 8px 18px rgba(99, 102, 241, 0.15);
+}
+
+.motore-machine-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--motore-ink);
+  letter-spacing: 0.02em;
+}
+
+.motore-variant-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.motore-variant-chip {
+  border: 1px solid var(--motore-border);
+  background: #ffffff;
+  color: var(--motore-ink);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.motore-variant-chip.active {
+  border-color: #6366f1;
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.motore-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag {
+  border-radius: 999px;
+  border: 1px solid var(--motore-border);
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--motore-ink);
+  background: #f1f5f9;
+}
+
+.tag.cad {
+  background: #dff3ea;
+  border-color: #92d6b6;
+  color: #0f3d2b;
+}
+
+.tag.thermo {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e3a8a;
+}
+
+.tag.elec {
+  background: #fff7d1;
+  border-color: #f2d48a;
+  color: #5f4a00;
+}
+
+.motore-editor {
+  gap: 16px;
+}
+
+.motore-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.motore-block {
+  border: 1px solid var(--motore-border);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #fbfcff;
+}
+
+.motore-block-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--motore-ink);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.motore-rule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.motore-rule-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: #b45309;
+}
+
+.motore-rule-warnings.hidden {
+  display: none;
+}
+
+.motore-rule-warning {
+  border-left: 3px solid #f97316;
+  padding-left: 8px;
+}
+
+.motore-rule-card {
+  border: 1px solid var(--motore-border);
+  border-radius: 12px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  background: #ffffff;
+}
+
+.motore-rule-handle {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  background: #e2e8f0;
+}
+
+.motore-rule-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.motore-rule-title {
+  font-weight: 600;
+  color: var(--motore-ink);
+}
+
+.motore-rule-sub {
+  font-size: 12px;
+  color: var(--motore-muted);
+}
+
+.motore-rule-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  background: #f1f5f9;
+  padding: 4px 8px;
+  border-radius: 999px;
+}
+
+.motore-hours-input {
+  width: 64px;
+  border: none;
+  background: transparent;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.motore-hours-input:focus {
+  outline: none;
+}
+
+.motore-milestone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.motore-milestone-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.motore-pill {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #f3edff;
+  border: 1px solid #cbb6f0;
+  color: #4c2f72;
+  font-weight: 700;
+}
+
+.motore-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.motore-fields label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--motore-muted);
+}
+
+.motore-fields input,
+.motore-fields select {
+  border: 1px solid var(--motore-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.motore-fields .toggle {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.motore-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.motore-sim .motore-block {
+  background: #ffffff;
+}
+
+.motore-output {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.motore-output-item {
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  border: 1px solid var(--motore-border);
+}
+
+.motore-output-item.ok {
+  background: #e7f7ef;
+  border-color: #9dd9b5;
+  color: #0f3d2b;
+}
+
+.motore-output-item.warn {
+  background: #fff4db;
+  border-color: #f4c76b;
+  color: #7a4a00;
+}
+
+.motore-hint {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.full {
+  width: 100%;
+}
+
+.muted {
+  color: var(--motore-muted);
+}
+
+@media (max-width: 1200px) {
+  .motore-layout {
+    grid-template-columns: 1fr;
+  }
+}

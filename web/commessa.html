@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scheda Commessa | Commesse Live</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">CL</div>
+          <div>
+            <div class="title">Scheda commessa</div>
+            <div id="commessaSubtitle" class="subtitle">Caricamento...</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="topbar-actions">
+            <button id="closeSchedaBtn" class="ghost" type="button">Chiudi</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="sheet-layout">
+        <section class="sheet-card">
+          <h2>Dati generali</h2>
+          <div id="sheetStatus" class="status-msg"></div>
+          <form id="schedaForm" class="form">
+            <div class="sheet-grid">
+              <label>
+                Tipologia macchina
+                <select id="tipoMacchina">
+                  <option value="">-</option>
+                  <option value="Senna">Senna</option>
+                  <option value="NEVA">NEVA</option>
+                  <option value="eLBA">eLBA</option>
+                </select>
+              </label>
+              <label>
+                Numero compressori MT
+                <input id="numCompressoriMt" type="number" min="0" step="1" />
+              </label>
+              <label>
+                Numero compressori LT
+                <input id="numCompressoriLt" type="number" min="0" step="1" />
+              </label>
+              <label>
+                Compressori AUX
+                <input id="numCompressoriAux" type="number" min="0" step="1" />
+              </label>
+              <label>
+                Compressori MT2/PDC/AC
+                <input id="numCompressoriMt2" type="number" min="0" step="1" />
+              </label>
+              <label>
+                Numero compressori LT2
+                <input id="numCompressoriLt2" type="number" min="0" step="1" />
+              </label>
+            </div>
+            <div class="sheet-actions">
+              <button id="saveSchedaBtn" class="primary" type="submit">Salva</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="commessa.js"></script>
+  </body>
+</html>

@@ -31,7 +31,10 @@
               <span id="authDot" class="auth-dot hidden"></span>
               <span id="authStatus" class="auth-status">Non autenticato</span>
               <div id="roleBadge" class="badge hidden">Ruolo</div>
+              <a class="ghost nav-link" href="motore.html">Regole</a>
               <button id="openResourcesBtn" class="ghost" type="button">Gestisci risorse</button>
+              <button id="openBackupBtn" class="ghost" type="button">Backup</button>
+              <button id="themeToggleBtn" class="ghost" type="button" aria-label="Toggle theme" title="Toggle theme">🌕</button>
               <button id="logoutBtn" class="ghost hidden link-btn">Log out</button>
             </div>
             <div id="authActions" class="auth-actions">
@@ -51,17 +54,6 @@
         <section id="commessePanel" class="panel collapsed">
           <div class="panel-header">
             <div class="panel-header-left">
-              <h2>Commesse</h2>
-              <div class="panel-actions">
-              <button
-                id="openNewCommessaBtn"
-                class="ghost icon-btn"
-                type="button"
-                title="Nuova commessa"
-                aria-label="Nuova commessa"
-              >
-                +
-              </button>
               <button
                 id="commesseToggleBtn"
                 class="ghost icon-btn"
@@ -69,25 +61,31 @@
                 title="Comprimi o espandi"
                 aria-label="Comprimi o espandi"
               >
-                ▾
+                v
               </button>
+              <h2 id="commesseTitle">Commesse</h2>
+              <div class="panel-actions">
+                <button
+                  id="openNewCommessaBtn"
+                  class="ghost new-btn"
+                  type="button"
+                  title="Nuova commessa"
+                  aria-label="Nuova commessa"
+                >
+                  + New
+                </button>
               </div>
             </div>
           </div>
           <div id="commessePanelBody" class="panel-body">
             <div class="filters">
-              <input id="searchInput" type="text" placeholder="Cerca codice, titolo, cliente" />
+              <input id="descriptionFilter" type="text" placeholder="Descrizione" />
+              <input id="numberFilter" type="number" min="1" step="1" placeholder="Numero" />
               <select id="yearFilter">
                 <option value="">Tutti gli anni</option>
               </select>
-              <select id="statusFilter">
-                <option value="">Tutti gli stati</option>
-                <option value="nuova">Nuova</option>
-                <option value="in_corso">In corso</option>
-                <option value="chiusa">Chiusa</option>
-                <option value="sospesa">Sospesa</option>
-              </select>
               <button id="openImportBtn" class="ghost" type="button">Importa Excel</button>
+              <button id="openImportDatesBtn" class="ghost" type="button">Importa date</button>
             </div>
             <div id="commesseList" class="list"></div>
           </div>
@@ -95,9 +93,9 @@
 
 
 
-        <section class="panel matrix-panel">
+        <section id="matrixPanel" class="panel matrix-panel">
           <div class="panel-header">
-            <h2>Matrice risorse</h2>
+            <h2 id="matrixTitle">Matrice risorse</h2>
             <div class="matrix-controls">
               <label class="matrix-switch">
                 <span>Shift automatico</span>
@@ -148,6 +146,9 @@
                 <option value="Progettazione termodinamica">Progettazione termodinamica</option>
                 <option value="Progettazione elettrica">Progettazione elettrica</option>
                 <option value="Ordine KIT cavi">Ordine KIT cavi</option>
+                <option value="PED E TARGHETTE">PED E TARGHETTE</option>
+                <option value="SEGNATURA ELETTRICA">SEGNATURA ELETTRICA</option>
+                <option value="OP ORDINI">OP ORDINI</option>
                 <option value="ASSENTE">ASSENTE</option>
                 <option value="Altro">Altro</option>
               </select>
@@ -201,18 +202,25 @@
               <div id="matrixCommesseList" class="matrix-commesse-list"></div>
               <div class="matrix-commesse-footer">
                 <div id="matrixAssenzaItem" class="matrix-assenza-item" draggable="true">Assenza</div>
-                <div id="matrixAltroItem" class="matrix-assenza-item matrix-altro-item" draggable="true">
+                <div id="matrixAltroItem" class="matrix-assenza-item matrix-altro-item lavender-item" draggable="true">
                   Altre attivita
                 </div>
+                <div id="matrixPedItem" class="matrix-assenza-item lavender-item" draggable="true">
+                  PED E TARGHETTE
+                </div>
+                <div id="matrixSegnaturaItem" class="matrix-assenza-item lavender-item" draggable="true">
+                  SEGNATURA ELETTRICA
+                </div>
+                <div id="matrixOpOrdiniItem" class="matrix-assenza-item lavender-item" draggable="true">OP ORDINI</div>
               </div>
             </div>
             <div id="matrixGrid" class="matrix-grid"></div>
           </div>
         </section>
 
-        <section class="panel calendar-panel">
+        <section id="calendarPanel" class="panel calendar-panel">
           <div class="panel-header">
-            <h2>Calendario attivita</h2>
+            <h2 id="calendarTitle">Calendario attivita</h2>
             <div class="calendar-controls">
               <button id="calPrevBtn" class="ghost" type="button"></button>
               <input id="calendarDate" type="date" />
@@ -226,13 +234,25 @@
           <div id="calendarGrid" class="calendar-grid"></div>
         </section>
 
-        <section class="panel report-panel">
+        <section id="reportPanel" class="panel report-panel">
           <div class="panel-header">
-            <h2>Reportistica</h2>
+            <h2 id="reportTitle">Pianificazione</h2>
             <div class="report-controls">
-              <button id="openProgressBtn" class="ghost" type="button">Mostra avanzamento commessa</button>
-              <button id="matrixReportSortBtn" class="ghost" type="button">Ordine: Crescente</button>
-              <div id="matrixReportRange" class="mono"></div>
+              <div class="report-filters">
+                <input id="reportDescFilter" type="text" placeholder="Descrizione" />
+                <input id="reportNumberFilter" type="number" min="1" step="1" placeholder="Numero" />
+                <select id="reportYearFilter">
+                  <option value="">Tutti gli anni</option>
+                </select>
+                <button id="reportHidePast" class="ghost report-toggle-btn active" type="button">Nascondo passato</button>
+                <button id="reportOrderDue" class="ghost report-toggle-btn active" type="button">Ordina in scadenza</button>
+              </div>
+              <div class="report-actions">
+                <button id="openProgressBtn" class="ghost" type="button">Mostra avanzamento commessa</button>
+                <button id="reportWorkloadBtn" class="ghost" type="button">Carico lavoro</button>
+                <button id="reportViewToggleBtn" class="ghost" type="button">Vista: Elenco</button>
+                <div id="matrixReportRange" class="mono"></div>
+              </div>
             </div>
           </div>
           <div id="matrixReportGrid" class="report-grid"></div>
@@ -258,77 +278,168 @@
       </div>
     </div>
 
+    <div id="importDatesModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Importa date commesse</h3>
+          <button id="closeImportDatesBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <p class="modal-hint">
+          Incolla righe tab-separate da Excel. Formato richiesto:
+          <span class="mono">codice_commessa + ingresso_ordine + ordine_telaio_target + ordine_telaio_stimato + prelievo_materiali + ordinato (VERO/FALSO) + consegna_macchina</span>.
+        </p>
+        <textarea
+          id="importDatesTextarea"
+          rows="10"
+          placeholder="2026_99	01/03/2026	15/03/2026	20/03/2026	25/03/2026	VERO	30/05/2026"
+        ></textarea>
+        <div id="importDatesPreview" class="modal-preview">Nessun dato incollato.</div>
+        <div class="modal-actions">
+          <button id="importDatesCommitBtn" class="primary" type="button">Importa</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="backupModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Backup data</h3>
+          <button id="closeBackupBtn" class="ghost" type="button">Close</button>
+        </div>
+        <div class="backup-grid">
+          <div class="backup-card">
+            <h4>Export</h4>
+            <p class="modal-hint">Download a JSON snapshot of all tables you can access.</p>
+            <button id="backupExportBtn" class="primary" type="button">Download backup</button>
+            <div id="backupExportStatus" class="modal-preview">Ready to export.</div>
+          </div>
+          <div class="backup-card">
+            <h4>Import</h4>
+            <p class="modal-hint">Upload a JSON backup. This will upsert existing rows.</p>
+            <input id="backupImportInput" type="file" accept="application/json" />
+            <label class="backup-confirm">
+              Type IMPORT to confirm
+              <input id="backupImportConfirm" type="text" placeholder="IMPORT" />
+            </label>
+            <div id="backupImportSummary" class="modal-preview">No file selected.</div>
+            <button id="backupImportBtn" class="danger" type="button" disabled>Import backup</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="milestonePicker" class="milestone-picker hidden">
+      <div id="milestoneTitle" class="milestone-title">Date picker</div>
+      <div class="milestone-picker-header">
+        <button id="milestonePrevBtn" class="ghost" type="button">◀</button>
+        <div id="milestoneLabel" class="milestone-label"></div>
+        <button id="milestoneNextBtn" class="ghost" type="button">▶</button>
+      </div>
+      <div class="milestone-weekdays">
+        <span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span>
+      </div>
+      <div id="milestoneDays" class="milestone-days"></div>
+      <div class="milestone-actions">
+        <button id="milestoneTransportVanBtn" class="ghost milestone-transport-btn" type="button" aria-label="Truck">
+          🚚
+        </button>
+        <button id="milestoneTransportShipBtn" class="ghost milestone-transport-btn" type="button" aria-label="Ship">
+          🚢
+        </button>
+        <button id="milestoneOrderBtn" class="ghost" type="button">Mark ordered</button>
+        <button id="milestoneClearBtn" class="ghost" type="button">Svuota data</button>
+      </div>
+    </div>
+    <div id="milestoneDragLabel" class="milestone-drag-label hidden"></div>
+
     <div id="commessaDetailModal" class="modal hidden">
       <div class="modal-card">
         <div class="modal-header">
           <h3>Dettaglio commessa</h3>
-          <button id="closeDetailBtn" class="ghost" type="button">Chiudi</button>
+          <button id="closeDetailBtn" class="ghost" type="button">X close</button>
         </div>
         <div id="selectedCode" class="mono">Nessuna selezionata</div>
         <form id="detailForm" class="form">
-          <div class="grid">
-            <label>
-              Anno
-              <input id="d_anno" type="number" min="2000" max="2100" placeholder="2026" />
-            </label>
-            <label>
-              Numero
-              <input id="d_numero" type="number" min="1" step="1" placeholder="99" />
-            </label>
+          <div class="detail-grid">
+            <div class="detail-row detail-row-main">
+              <label>
+                Anno
+                <input id="d_anno" type="number" min="2000" max="2100" placeholder="2026" />
+              </label>
+              <label>
+                Numero
+                <input id="d_numero" type="number" min="1" step="1" placeholder="99" />
+              </label>
+              <label>
+                Descrizione
+                <input id="d_titolo" type="text" placeholder="Descrizione breve" />
+              </label>
+              <label>
+                Cliente
+                <input id="d_cliente" type="text" placeholder="Cliente" />
+              </label>
+            </div>
             <div id="d_numeroWarning" class="form-warning hidden"></div>
-            <label>
-              Descrizione
-              <input id="d_titolo" type="text" placeholder="Descrizione breve" />
-            </label>
-            <label>
-              Cliente
-              <input id="d_cliente" type="text" placeholder="Cliente" />
-            </label>
-            <label>
-              Stato
-              <select id="d_stato">
-                <option value="nuova">Nuova</option>
-                <option value="in_corso">In corso</option>
-                <option value="chiusa">Chiusa</option>
-                <option value="sospesa">Sospesa</option>
-              </select>
-            </label>
-            <label>
-              Priorita
-              <select id="d_priorita">
-                <option value="">-</option>
-                <option value="bassa">Bassa</option>
-                <option value="media">Media</option>
-                <option value="alta">Alta</option>
-                <option value="critica">Critica</option>
-              </select>
-            </label>
-            <label>
-              Data ingresso
-              <input id="d_data_ingresso" type="date" />
-            </label>
-            <label>
-              Consegna prevista
-              <input id="d_data_consegna" type="date" />
-            </label>
+            <div class="detail-row detail-row-status">
+              <label>
+                Stato
+                <select id="d_stato">
+                  <option value="nuova">Nuova</option>
+                  <option value="in_corso">In corso</option>
+                  <option value="chiusa">Chiusa</option>
+                  <option value="sospesa">Sospesa</option>
+                </select>
+              </label>
+              <label>
+                Priorita
+                <select id="d_priorita">
+                  <option value="">-</option>
+                  <option value="bassa">Bassa</option>
+                  <option value="media">Media</option>
+                  <option value="alta">Alta</option>
+                  <option value="critica">Critica</option>
+                </select>
+              </label>
+            </div>
+            <div class="detail-row detail-row-dates">
+              <label>
+                Data ingresso
+                <input id="d_data_ingresso" type="date" />
+              </label>
+              <label>
+                Ordine telaio target
+                <input id="d_data_ordine_telaio" type="date" />
+              </label>
+              <label>
+                Ordine telaio stimato
+                <input id="d_data_consegna_telaio_effettiva" type="date" />
+              </label>
+              <label>
+                Prelievo materiali
+                <input id="d_data_prelievo_materiali" type="date" />
+              </label>
+              <label class="form-toggle-field">
+                Telaio
+                <button id="d_telaio_ordinato" class="telaio-toggle" type="button" aria-pressed="false">
+                  Telaio da ordinare
+                </button>
+              </label>
+              <label>
+                Consegna prevista
+                <input id="d_data_consegna" type="date" />
+              </label>
+            </div>
           </div>
           <label>
             Note generali
             <textarea id="d_note" rows="3"></textarea>
           </label>
           <div class="actions">
-            <button id="updateBtn" class="primary" type="submit">Salva modifiche</button>
-            <button id="clearSelectionBtn" class="ghost" type="button">Deseleziona</button>
+            <button id="updateBtn" class="primary" type="submit">Save and close</button>
+            <button id="applyBtn" class="ghost" type="button">Apply</button>
+            <button id="detailDeleteBtn" class="danger action-right" type="button">Delete Commessa</button>
           </div>
         </form>
-        <div class="section">
-          <h3>Reparti</h3>
-          <div id="repartiList" class="reparti"></div>
-          <form id="addRepartoForm" class="inline-form">
-            <select id="addRepartoSelect"></select>
-            <button id="addRepartoBtn" class="ghost" type="submit">Aggiungi reparto</button>
-          </form>
-        </div>
       </div>
     </div>
 
@@ -382,6 +493,18 @@
           <label>
             Data ingresso
             <input id="n_data_ingresso" type="date" />
+          </label>
+          <label>
+            Ordine telaio
+            <input id="n_data_ordine_telaio" type="date" />
+          </label>
+          <label class="form-checkbox">
+            <input id="n_telaio_consegnato" type="checkbox" />
+            <span>Telaio ordinato</span>
+          </label>
+          <label>
+            Consegna telaio stimata
+            <input id="n_data_consegna_telaio_effettiva" type="date" />
           </label>
           <label>
             Consegna prevista
@@ -449,29 +572,45 @@
       <div class="modal-card">
         <div class="modal-header">
           <h3>Gestisci attivita</h3>
-          <button id="activityCloseBtn" class="ghost" type="button">Chiudi</button>
+          <div class="modal-header-actions">
+            <button id="activityGanttBtn" class="ghost activity-gantt-btn" type="button" title="Open gantt" aria-label="Open gantt">
+              <svg class="activity-gantt-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <line x1="4" y1="7" x2="18" y2="7"></line>
+                <line x1="4" y1="12" x2="14" y2="12"></line>
+                <line x1="4" y1="17" x2="20" y2="17"></line>
+              </svg>
+              <span class="activity-gantt-label">GO TO GANTT</span>
+            </button>
+            <button id="activityCloseBtn" class="ghost modal-close-btn" type="button" aria-label="Close">×</button>
+          </div>
         </div>
         <div id="activityMeta" class="modal-hint"></div>
-        <div>
-          <div class="modal-hint">Attivita</div>
-          <div id="activityTitleList" class="checks"></div>
-        </div>
-        <div id="activityAssenzaWrap" class="hidden">
-          <div class="modal-hint">Ore assenza</div>
-          <div class="quick-buttons">
-            <button id="activityAssenzaFullBtn" class="ghost" type="button">Giornata intera</button>
-            <button id="activityAssenzaHalfBtn" class="ghost" type="button">Mezza giornata</button>
+        <div class="activity-grid">
+          <div class="activity-left">
+            <div>
+              <div class="modal-hint">Attivita</div>
+              <div id="activityTitleList" class="checks"></div>
+            </div>
+            <div id="activityAssenzaWrap" class="hidden">
+              <div class="modal-hint">Ore assenza</div>
+              <div class="quick-buttons">
+                <button id="activityAssenzaFullBtn" class="ghost" type="button">Giornata intera</button>
+                <button id="activityAssenzaHalfBtn" class="ghost" type="button">Mezza giornata</button>
+              </div>
+              <input id="activityAssenzaOre" type="number" min="0" step="0.5" placeholder="Tot ore" />
+            </div>
+            <label>
+              Durata (giorni)
+              <input id="activityDurationInput" type="number" min="1" step="1" />
+            </label>
           </div>
-          <input id="activityAssenzaOre" type="number" min="0" step="0.5" placeholder="Tot ore" />
+          <div class="activity-right">
+            <label id="activityAltroNoteWrap" class="activity-note">
+              Note
+              <textarea id="activityAltroNote" rows="8" placeholder="Scrivi una nota..."></textarea>
+            </label>
+          </div>
         </div>
-        <label id="activityAltroNoteWrap" class="hidden">
-          Note (solo per Altro)
-          <input id="activityAltroNote" type="text" placeholder="Scrivi una nota..." />
-        </label>
-        <label>
-          Durata (giorni)
-          <input id="activityDurationInput" type="number" min="1" step="1" />
-        </label>
         <div class="modal-actions">
           <button id="activityDeleteBtn" class="danger" type="button">Elimina attivita</button>
           <button id="activitySaveBtn" class="primary" type="button">Salva durata</button>
@@ -488,6 +627,23 @@
         <div class="modal-actions">
           <button id="confirmCancelBtn" class="ghost" type="button">Annulla</button>
           <button id="confirmOkBtn" class="danger" type="button">Elimina</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="deleteCommessaModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Delete commessa</h3>
+        </div>
+        <div id="deleteCommessaMessage" class="modal-hint"></div>
+        <label>
+          Type DELETE to confirm
+          <input id="deleteCommessaInput" type="text" placeholder="DELETE" />
+        </label>
+        <div class="modal-actions">
+          <button id="deleteCommessaCancelBtn" class="ghost" type="button">Cancel</button>
+          <button id="deleteCommessaConfirmBtn" class="danger" type="button" disabled>Delete</button>
         </div>
       </div>
     </div>
@@ -535,9 +691,41 @@
       </div>
     </div>
 
-    <div id="matrixQuickMenu" class="matrix-quick-menu hidden">
-      <button id="matrixQuickToggleBtn" type="button">Segna fatto</button>
+    <div id="workloadModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Chassis order</h3>
+          <button id="workloadCloseBtn" class="ghost" type="button">Close</button>
+        </div>
+        <div class="workload-form">
+          <label>
+            Start week
+            <input id="workloadWeekStart" type="week" />
+          </label>
+          <label>
+            End week
+            <input id="workloadWeekEnd" type="week" />
+          </label>
+          <button id="workloadRunBtn" class="primary" type="button">Calculate</button>
+        </div>
+        <div id="workloadSummary" class="modal-preview">Select the weeks to calculate.</div>
+        <div id="workloadList" class="workload-list"></div>
+      </div>
     </div>
+
+    <div id="matrixQuickMenu" class="matrix-quick-menu hidden">
+      <div id="matrixQuickInfo" class="matrix-quick-info"></div>
+      <button id="matrixQuickToggleBtn" type="button">Done</button>
+    </div>
+
+    <div id="commessaFocusOverlay" class="commessa-focus-overlay hidden"></div>
+    <div id="commessaQuickMenu" class="commessa-quick-menu hidden">
+      <button id="commessaQuickSeeMoreBtn" type="button">See more</button>
+    </div>
+
+    <div id="reportDeptMenu" class="report-dept-menu hidden"></div>
+
+    <div id="toastStack" class="toast-stack"></div>
 
     <script src="app.js"></script>
   </body>
