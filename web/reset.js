@@ -33,53 +33,131 @@
     return new URLSearchParams(hash);
   };
 
-  const bootstrapSession = async () => {
-    const params = getHashParams();
-    const type = params.get("type");
-    const accessToken = params.get("access_token");
-    const refreshToken = params.get("refresh_token");
+  const getQueryParams = () => new URLSearchParams(window.location.search || "");
 
-    if (type !== "recovery" || !accessToken || !refreshToken) {
-      setStatus("Invalid or expired reset link.", "error");
-      if (resetForm) resetForm.classList.add("hidden");
-      return false;
+  const hasParam = (value) => typeof value === "string" && value.trim().length > 0;
+
+  const scrubUrl = () => {
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState(null, "", window.location.pathname);
     }
+  };
 
+  const ensureSession = async () => {
+    const { data } = await supabase.auth.getSession();
+    return data?.session || null;
+  };
+
+  const bootstrapSession = async () => {
+    const hashParams = getHashParams();
+    const queryParams = getQueryParams();
+
+    const typeFromHash = hashParams.get("type");
+    const typeFromQuery = queryParams.get("type");
+    const type = (typeFromQuery || typeFromHash || "").trim();
+
+    const accessToken = queryParams.get("access_token") || hashParams.get("access_token");
+    const refreshToken = queryParams.get("refresh_token") || hashParams.get("refresh_token");
+
+    const code = queryParams.get("code") || hashParams.get("code");
+    const tokenHash = queryParams.get("token_hash") || hashParams.get("token_hash");
+    const token = queryParams.get("token") || hashParams.get("token");
+
+    if (!resetForm) return false;
+
+    setStatus("Checking reset link…");
+    setLoading(true);
     let error = null;
+
     try {
-      const result = await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
-      error = result.error;
+      const existingSession = await ensureSession();
+      if (existingSession) {
+        scrubUrl();
+        setStatus("Set a new password to complete the reset.");
+        resetForm.classList.remove("hidden");
+        return true;
+      }
+
+      // Prefer the official parser when available (handles both fragments and query params).
+      try {
+        const parsed = await supabase.auth.getSessionFromUrl({ storeSession: true });
+        if (parsed?.data?.session) {
+          scrubUrl();
+          setStatus("Set a new password to complete the reset.");
+          resetForm.classList.remove("hidden");
+          return true;
+        }
+        if (parsed?.error) error = parsed.error;
+      } catch {
+        // Ignore and fall back to manual handlers below.
+      }
+
+      if (hasParam(code)) {
+        const result = await supabase.auth.exchangeCodeForSession(code);
+        error = result.error;
+      } else if ((typeFromHash === "recovery" || type === "recovery") && hasParam(accessToken)) {
+        const result = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken || "",
+        });
+        error = result.error;
+      } else if ((hasParam(tokenHash) || hasParam(token)) && hasParam(type)) {
+        const result = await supabase.auth.verifyOtp({
+          ...(hasParam(tokenHash) ? { token_hash: tokenHash } : { token }),
+          type,
+        });
+        error = result.error;
+      } else {
+        error = new Error("Missing recovery parameters.");
+      }
     } catch (err) {
       if (String(err?.name || "") === "AbortError") {
         await new Promise((resolve) => setTimeout(resolve, 300));
         try {
-          const retry = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-          error = retry.error;
+          if (hasParam(code)) {
+            const retry = await supabase.auth.exchangeCodeForSession(code);
+            error = retry.error;
+          } else if ((typeFromHash === "recovery" || type === "recovery") && hasParam(accessToken)) {
+            const retry = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken || "",
+            });
+            error = retry.error;
+          } else if ((hasParam(tokenHash) || hasParam(token)) && hasParam(type)) {
+            const retry = await supabase.auth.verifyOtp({
+              ...(hasParam(tokenHash) ? { token_hash: tokenHash } : { token }),
+              type,
+            });
+            error = retry.error;
+          } else {
+            error = new Error("Missing recovery parameters.");
+          }
         } catch (retryErr) {
           error = retryErr;
         }
       } else {
         error = err;
       }
+    } finally {
+      setLoading(false);
     }
 
-    if (error) {
-      setStatus("Invalid or expired reset link.", "error");
-      if (resetForm) resetForm.classList.add("hidden");
+    const session = await ensureSession();
+    if (error || !session) {
+      const debug = `Params: code=${hasParam(code) ? "yes" : "no"}, access_token=${
+        hasParam(accessToken) ? "yes" : "no"
+      }, refresh_token=${hasParam(refreshToken) ? "yes" : "no"}, token_hash=${hasParam(tokenHash) ? "yes" : "no"}, token=${
+        hasParam(token) ? "yes" : "no"
+      }, type=${type || "(none)"}`;
+      const detail = error?.message ? ` (${error.message})` : "";
+      setStatus(`Invalid or expired reset link.${detail} ${debug}`, "error");
+      resetForm.classList.remove("hidden");
       return false;
     }
 
-    if (window.history && window.history.replaceState) {
-      window.history.replaceState(null, "", window.location.pathname);
-    }
-
+    scrubUrl();
     setStatus("Set a new password to complete the reset.");
+    resetForm.classList.remove("hidden");
     return true;
   };
 
@@ -87,6 +165,12 @@
     event.preventDefault();
     const password = newPassword ? newPassword.value.trim() : "";
     const confirm = confirmPassword ? confirmPassword.value.trim() : "";
+
+    const session = await ensureSession();
+    if (!session) {
+      setStatus("Reset link not verified. Please open the reset link again or request a new one.", "error");
+      return;
+    }
 
     if (!password) {
       setStatus("Please enter a new password.", "error");
