@@ -45,6 +45,7 @@ const el = (id) => document.getElementById(id);
 
 const authStatus = el("authStatus");
 const roleBadge = el("roleBadge");
+const setPasswordBtn = el("setPasswordBtn");
 const statusMsg = el("statusMsg");
 const revisionStamp = el("revisionStamp");
 
@@ -1594,6 +1595,7 @@ function syncSignedOut() {
   state.commesse = [];
   authStatus.textContent = "Non autenticato";
   logoutBtn.classList.add("hidden");
+  if (setPasswordBtn) setPasswordBtn.classList.add("hidden");
   if (authActions) authActions.classList.remove("is-authenticated");
   if (authDot) authDot.classList.add("hidden");
   setRoleBadge("");
@@ -1768,6 +1770,35 @@ async function resetPassword() {
     ""
   );
   updateResetCooldownUI(false);
+}
+
+async function changePassword() {
+  if (!state.session) {
+    setStatus("Sign in first.", "error");
+    return;
+  }
+  const password = window.prompt("Nuova password (min 8 caratteri):", "");
+  if (!password) return;
+  if (password.trim().length < 8) {
+    setStatus("Password troppo corta (min 8 caratteri).", "error");
+    return;
+  }
+  const confirm = window.prompt("Conferma nuova password:", "");
+  if (confirm !== password) {
+    setStatus("Le password non coincidono.", "error");
+    return;
+  }
+  if (setPasswordBtn) setPasswordBtn.disabled = true;
+  try {
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) {
+      setStatus(`Errore aggiornamento password: ${error.message}`, "error");
+      return;
+    }
+    setStatus("Password aggiornata.", "ok");
+  } finally {
+    if (setPasswordBtn) setPasswordBtn.disabled = false;
+  }
 }
 
 async function signOut() {
@@ -4917,6 +4948,11 @@ async function loadProfile(userFromSession = null) {
   state.profile = data;
   debugLog(`loadProfile ok: ${data.email || data.id}`);
   setRoleBadge(data.ruolo);
+  if (setPasswordBtn) {
+    const role = String(data.ruolo || "").trim().toLowerCase();
+    if (role === "admin") setPasswordBtn.classList.remove("hidden");
+    else setPasswordBtn.classList.add("hidden");
+  }
   setWriteAccess(data.ruolo !== "viewer");
   authStatus.textContent = `Connesso come ${data.email}`;
   logoutBtn.classList.remove("hidden");
@@ -7134,6 +7170,9 @@ loginBtn.addEventListener("click", signIn);
 logoutBtn.addEventListener("click", signOut);
 if (resetPasswordBtn) {
   resetPasswordBtn.addEventListener("click", resetPassword);
+}
+if (setPasswordBtn) {
+  setPasswordBtn.addEventListener("click", changePassword);
 }
 
 updateResetCooldownUI();

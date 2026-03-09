@@ -160,6 +160,28 @@ body.theme-dark {
   gap: 8px;
 }
 
+.auth-status-line .link-btn {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  color: var(--primary);
+}
+
+.auth-status-line .link-btn:hover {
+  text-decoration: underline;
+}
+
+.key-btn {
+  border: none;
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.key-btn:hover {
+  filter: brightness(0.95);
+}
+
 .auth-dot {
   width: 8px;
   height: 8px;
