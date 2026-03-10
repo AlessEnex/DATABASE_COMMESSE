@@ -82,20 +82,6 @@
         return true;
       }
 
-      // Prefer the official parser when available (handles both fragments and query params).
-      try {
-        const parsed = await supabase.auth.getSessionFromUrl({ storeSession: true });
-        if (parsed?.data?.session) {
-          scrubUrl();
-          setStatus("Set a new password to complete the reset.");
-          resetForm.classList.remove("hidden");
-          return true;
-        }
-        if (parsed?.error) error = parsed.error;
-      } catch {
-        // Ignore and fall back to manual handlers below.
-      }
-
       if (hasParam(code)) {
         const result = await supabase.auth.exchangeCodeForSession(code);
         error = result.error;
