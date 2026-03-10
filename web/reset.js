@@ -2,6 +2,10 @@
   const SUPABASE_URL = "https://bsceqirconhqmxwipbyl.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_zE9Cz_GnZIRluKPkr41RxA_EqCZxVgp";
 
+  // Snapshot URL params before Supabase init (some clients may scrub/alter the URL).
+  const INITIAL_SEARCH = window.location.search || "";
+  const INITIAL_HASH = window.location.hash || "";
+
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     auth: {
       detectSessionInUrl: false,
@@ -29,11 +33,11 @@
   };
 
   const getHashParams = () => {
-    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
+    const hash = INITIAL_HASH.startsWith("#") ? INITIAL_HASH.slice(1) : INITIAL_HASH;
     return new URLSearchParams(hash);
   };
 
-  const getQueryParams = () => new URLSearchParams(window.location.search || "");
+  const getQueryParams = () => new URLSearchParams(INITIAL_SEARCH || "");
 
   const hasParam = (value) => typeof value === "string" && value.trim().length > 0;
 
@@ -166,10 +170,14 @@
     const password = newPassword ? newPassword.value.trim() : "";
     const confirm = confirmPassword ? confirmPassword.value.trim() : "";
 
-    const session = await ensureSession();
+    let session = await ensureSession();
     if (!session) {
-      setStatus("Reset link not verified. Please open the reset link again or request a new one.", "error");
-      return;
+      await bootstrapSession();
+      session = await ensureSession();
+      if (!session) {
+        setStatus("Reset link not verified. Please open the reset link again or request a new one.", "error");
+        return;
+      }
     }
 
     if (!password) {
