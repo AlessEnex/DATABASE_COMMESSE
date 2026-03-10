@@ -69,8 +69,6 @@
 
     if (!resetForm) return false;
 
-    setStatus("Checking reset link…");
-    setLoading(true);
     let error = null;
 
     try {
@@ -82,54 +80,14 @@
         return true;
       }
 
-      if (hasParam(code)) {
-        const result = await supabase.auth.exchangeCodeForSession(code);
-        error = result.error;
-      } else if ((typeFromHash === "recovery" || type === "recovery") && hasParam(accessToken)) {
-        const result = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken || "",
-        });
-        error = result.error;
-      } else if ((hasParam(tokenHash) || hasParam(token)) && hasParam(type)) {
-        const result = await supabase.auth.verifyOtp({
-          ...(hasParam(tokenHash) ? { token_hash: tokenHash } : { token }),
-          type,
-        });
-        error = result.error;
-      } else {
-        error = new Error("Missing recovery parameters.");
+      if (hasParam(code) || hasParam(accessToken) || hasParam(tokenHash) || hasParam(token)) {
+        setStatus("Enter a new password to complete the reset.");
+        resetForm.classList.remove("hidden");
+        return true;
       }
+      error = new Error("Missing recovery parameters.");
     } catch (err) {
-      if (String(err?.name || "") === "AbortError") {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        try {
-          if (hasParam(code)) {
-            const retry = await supabase.auth.exchangeCodeForSession(code);
-            error = retry.error;
-          } else if ((typeFromHash === "recovery" || type === "recovery") && hasParam(accessToken)) {
-            const retry = await supabase.auth.setSession({
-              access_token: accessToken,
-              refresh_token: refreshToken || "",
-            });
-            error = retry.error;
-          } else if ((hasParam(tokenHash) || hasParam(token)) && hasParam(type)) {
-            const retry = await supabase.auth.verifyOtp({
-              ...(hasParam(tokenHash) ? { token_hash: tokenHash } : { token }),
-              type,
-            });
-            error = retry.error;
-          } else {
-            error = new Error("Missing recovery parameters.");
-          }
-        } catch (retryErr) {
-          error = retryErr;
-        }
-      } else {
-        error = err;
-      }
-    } finally {
-      setLoading(false);
+      error = err;
     }
 
     const session = await ensureSession();
@@ -156,26 +114,62 @@
     const password = newPassword ? newPassword.value.trim() : "";
     const confirm = confirmPassword ? confirmPassword.value.trim() : "";
 
-    let session = await ensureSession();
-    if (!session) {
-      await bootstrapSession();
-      session = await ensureSession();
-      if (!session) {
-        setStatus("Reset link not verified. Please open the reset link again or request a new one.", "error");
+    setLoading(true);
+    try {
+      const hashParams = getHashParams();
+      const queryParams = getQueryParams();
+      const typeFromHash = hashParams.get("type");
+      const typeFromQuery = queryParams.get("type");
+      const type = (typeFromQuery || typeFromHash || "").trim();
+
+      const accessToken = queryParams.get("access_token") || hashParams.get("access_token");
+      const refreshToken = queryParams.get("refresh_token") || hashParams.get("refresh_token");
+      const code = queryParams.get("code") || hashParams.get("code");
+      const tokenHash = queryParams.get("token_hash") || hashParams.get("token_hash");
+      const token = queryParams.get("token") || hashParams.get("token");
+
+      let verifyError = null;
+      if (hasParam(code)) {
+        const result = await supabase.auth.exchangeCodeForSession(code);
+        verifyError = result.error;
+      } else if ((typeFromHash === "recovery" || type === "recovery") && hasParam(accessToken)) {
+        const result = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken || "",
+        });
+        verifyError = result.error;
+      } else if ((hasParam(tokenHash) || hasParam(token)) && hasParam(type)) {
+        const result = await supabase.auth.verifyOtp({
+          ...(hasParam(tokenHash) ? { token_hash: tokenHash } : { token }),
+          type,
+        });
+        verifyError = result.error;
+      } else {
+        verifyError = new Error("Missing recovery parameters.");
+      }
+
+      if (verifyError) {
+        setStatus(`Reset link not verified. ${verifyError.message || ""}`, "error");
+        setLoading(false);
         return;
       }
+    } catch (err) {
+      setStatus(`Reset link not verified. ${err?.message || err}`, "error");
+      setLoading(false);
+      return;
     }
 
     if (!password) {
       setStatus("Please enter a new password.", "error");
+      setLoading(false);
       return;
     }
     if (password !== confirm) {
       setStatus("Passwords do not match.", "error");
+      setLoading(false);
       return;
     }
 
-    setLoading(true);
     const { error } = await supabase.auth.updateUser({ password });
     setLoading(false);
 
