@@ -9,6 +9,21 @@ const FETCH_TIMEOUT_MS = 1500;
 const NAV_ENTRY = performance.getEntriesByType("navigation")[0];
 const PREFER_REST_ON_RELOAD = NAV_ENTRY && NAV_ENTRY.type === "reload";
 
+const DEFAULT_RESET_REDIRECT_URL = "https://www.pianificazionecommesse.it/reset.html";
+const GITHUB_PAGES_RESET_REDIRECT_URL = "https://alessenex.github.io/DATABASE_COMMESSE/reset.html";
+
+function getResetRedirectUrl() {
+  try {
+    const origin = window.location.origin;
+    const host = window.location.hostname || "";
+    if (!origin || origin === "null") return DEFAULT_RESET_REDIRECT_URL;
+    if (host.endsWith("github.io")) return GITHUB_PAGES_RESET_REDIRECT_URL;
+    return new URL("/reset.html", origin).toString();
+  } catch {
+    return DEFAULT_RESET_REDIRECT_URL;
+  }
+}
+
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
@@ -1751,7 +1766,7 @@ async function resetPassword() {
   if (resetPasswordBtn && resetPasswordBtn.disabled) return;
   setAuthLoading(true);
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: "https://alessenex.github.io/DATABASE_COMMESSE/reset.html",
+    redirectTo: "https://pianificazionecommesse.it/reset.html",
   });
   setAuthLoading(false);
   if (error) {
