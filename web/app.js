@@ -379,6 +379,8 @@ const reportDeptMenu = el("reportDeptMenu");
 const todoSection = el("todoSection");
 const todoGrid = el("todoGrid");
 const todoStatusMenu = el("todoStatusMenu");
+const sectionToolbar = el("sectionToolbar");
+const sectionLinks = Array.from(document.querySelectorAll(".section-link"));
 const MILESTONE_MIN_YEAR = 2024;
 const MILESTONE_MAX_YEAR = 2030;
 const calendarDate = el("calendarDate");
@@ -1801,6 +1803,16 @@ function canDeleteMatrixActivity(activity) {
     return activity ? String(activity.risorsa_id) === String(ownId) : false;
   }
   return false;
+}
+
+function canAssignCommessaToRisorsa(risorsaId) {
+  if (!state.profile || !risorsaId) return false;
+  const role = String(state.profile.ruolo || "").trim().toLowerCase();
+  if (role === "operatore") {
+    const ownId = getOwnRisorsaId();
+    return Boolean(ownId) && String(ownId) === String(risorsaId);
+  }
+  return canMoveMatrixActivity(null, risorsaId);
 }
 
 function canEditGanttMilestone(field) {
@@ -4780,7 +4792,13 @@ async function handleMatrixDropOnCell(cell, e) {
   if (!risorsaId || !dayKey) return;
   const r = matrixState.risorse.find((x) => String(x.id) === String(risorsaId));
   if (!r) return;
-  if (!canMoveMatrixActivity(null, r.id)) {
+  const commessaId = e.dataTransfer.getData("application/x-commessa-id");
+  if (commessaId) {
+    if (!canAssignCommessaToRisorsa(r.id)) {
+      setStatus("Non autorizzato ad assegnare su questa riga.", "error");
+      return;
+    }
+  } else if (!canMoveMatrixActivity(null, r.id)) {
     setStatus("Non autorizzato a modificare questa riga.", "error");
     return;
   }
@@ -4879,7 +4897,6 @@ async function handleMatrixDropOnCell(cell, e) {
     await createGenericActivity("OP ORDINI", { openModal: false });
     return;
   }
-  const commessaId = e.dataTransfer.getData("application/x-commessa-id");
   if (commessaId) {
     matrixState.pendingDrop = { commessaId, risorsaId: r.id, day: d };
     renderAssignActivities();
@@ -6975,12 +6992,12 @@ function renderTodoSection(commesse) {
       cell.style.gridColumn = String(colStart);
       const statusLabel =
         status === "fatta"
-          ? "Fatta"
+          ? "DONE"
           : status === "schedulata"
-          ? "Schedulata"
+          ? "PLANNED"
           : status === "non_necessaria"
           ? "Non necessaria"
-          : "Da schedulare";
+          : "TO PLAN";
       const statusClass =
         status === "fatta"
           ? "todo-fatta"
@@ -8297,7 +8314,7 @@ async function handleAssignConfirm() {
       assignConfirmBtn.textContent = "Assegno...";
     }
   const { commessaId, risorsaId, day } = matrixState.pendingDrop;
-  if (!canMoveMatrixActivity(null, risorsaId)) {
+  if (!canAssignCommessaToRisorsa(risorsaId)) {
     setStatus("Non autorizzato a modificare questa riga.", "error");
     return;
   }
@@ -9167,6 +9184,28 @@ document.addEventListener("drop", () => {
   closeMatrixQuickMenu();
   if (matrixTrash) matrixTrash.classList.remove("is-dragover");
 });
+sectionLinks.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const targetId = btn.dataset.target;
+    if (!targetId) return;
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
+    const top = rect.top + window.scrollY - toolbarOffset - getSectionToolbarGap();
+    window.scrollTo({ top: Math.max(0, top), left: 0, behavior: "smooth" });
+  });
+});
+const updateSectionToolbarOffset = () => {
+  const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
+  document.documentElement.style.setProperty("--section-toolbar-h", `${toolbarOffset}px`);
+};
+updateSectionToolbarOffset();
+window.addEventListener("resize", updateSectionToolbarOffset);
+if (sectionToolbar && typeof ResizeObserver !== "undefined") {
+  const toolbarObserver = new ResizeObserver(() => updateSectionToolbarOffset());
+  toolbarObserver.observe(sectionToolbar);
+}
 if (todoStatusMenu) {
   todoStatusMenu.addEventListener("click", async (event) => {
     const target = event.target.closest("button");
@@ -9239,3 +9278,8 @@ updateRevisionStamp();
 
 })();
 
+const getSectionToolbarGap = () => {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue("--section-toolbar-gap").trim();
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : 0;
+};

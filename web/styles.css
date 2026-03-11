@@ -8,6 +8,7 @@
   --border: #d7dbe3;
   --card: #ffffff;
   --danger: #b23b3b;
+  --section-toolbar-gap: 0px;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
 }
@@ -29,12 +30,17 @@ body.theme-dark {
   box-sizing: border-box;
 }
 
+html {
+  scroll-padding-top: calc(var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
+}
+
 body {
   margin: 0;
   font-family: var(--sans);
   color: var(--ink);
   background: radial-gradient(circle at top left, #fdfefe 0%, var(--bg) 45%, var(--bg-accent) 100%);
   user-select: none;
+  overflow-x: hidden;
 }
 
 body.theme-dark {
@@ -53,12 +59,21 @@ body.theme-dark {
   align-items: center;
   padding: 18px 22px;
   background: var(--card);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 14px;
   box-shadow: 0 12px 30px rgba(16, 28, 43, 0.08);
   font-weight: 500;
   font-size: 16px;
   color: #2a2f36;
+}
+
+.panel,
+#todoSection,
+#calendarPanel,
+#matrixPanel,
+#reportPanel,
+#commessePanel {
+  scroll-margin-top: calc(var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
 }
 
 .topbar .ghost,
@@ -281,6 +296,49 @@ body.theme-dark {
 
 body.theme-dark .status-bar {
   background: rgba(20, 27, 38, 0.85);
+}
+
+.section-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px 0;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  width: 100vw;
+  margin: 0 0 0 calc(50% - 50vw);
+  box-sizing: border-box;
+}
+
+.section-link {
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: none;
+  background: #ffffff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.section-link:hover {
+  background: #f2f5fb;
+}
+
+body.theme-dark .section-link {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+body.theme-dark .section-link:hover {
+  background: #111c33;
+}
+
+body.theme-dark .section-toolbar {
+  background: var(--card);
 }
 
 body.theme-dark .topbar,
@@ -955,6 +1013,10 @@ button {
   background: transparent;
   color: var(--primary);
   border: 1px solid var(--primary);
+}
+
+.section-toolbar .section-link {
+  border: none;
 }
 
 #themeToggleBtn {
@@ -1863,17 +1925,26 @@ body.theme-dark #activityModal .filter-pill.lavender-pill.active {
 
 .report-panel .panel-header {
   position: sticky;
-  top: 0;
+  top: calc(var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
   z-index: 6;
-  background: var(--card);
-  padding-top: 8px;
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  margin: -16px -16px 0 -16px;
+  padding: 2px 16px 4px;
+  border-bottom: 1px solid rgba(215, 219, 227, 0.7);
 }
 
 .report-controls {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .report-filters {
@@ -1887,7 +1958,7 @@ body.theme-dark #activityModal .filter-pill.lavender-pill.active {
 .report-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -2712,16 +2783,16 @@ body.theme-dark .report-gantt-empty.report-pill-orange {
 }
 
 .report-toggle-btn {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 10px;
-  font-size: 12px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 11px;
 }
 
 .report-toggle-btn.active {
   background: #e8f7ee;
   color: #1f5c35;
-  border-color: #7cc59a;
+  border: none;
 }
 
 .report-grid.report-list {
@@ -2962,9 +3033,9 @@ body.theme-dark .report-commessa-link:hover {
 }
 
 .todo-status.todo-da-schedulare {
-  background: #f1f3f6;
-  color: #4b5563;
-  border-color: #d9dde5;
+  background: #fff6cc;
+  color: #6b5600;
+  border-color: #f0c84b;
 }
 
 .todo-status.todo-schedulata {
@@ -3040,6 +3111,12 @@ body.theme-dark .todo-status-menu {
   background: #0f172a;
 }
 
+body.theme-dark .todo-status.todo-da-schedulare {
+  background: #4a3d16;
+  color: #ffe9a3;
+  border-color: #c9a84b;
+}
+
 .report-cell {
   padding: 10px;
   border-right: 1px solid var(--border);
@@ -3097,11 +3174,13 @@ body.theme-dark .todo-status-menu {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
-  padding: 6px 10px;
-  border-radius: 0;
-  background: transparent;
+  padding: 4px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: none;
   box-shadow: none;
 }
@@ -3156,7 +3235,7 @@ body.theme-dark .todo-status-menu {
 .matrix-control > .matrix-attivita-picker,
 .matrix-control > .mono,
 .matrix-control > .matrix-extra {
-  min-height: 36px;
+  min-height: 30px;
 }
 
 .matrix-control-label {
@@ -3169,18 +3248,17 @@ body.theme-dark .todo-status-menu {
 
 .matrix-controls button.ghost {
   background: transparent;
-  border: 1px solid transparent;
+  border: none !important;
   color: #1a1f2b;
-  border-radius: 6px;
-  padding: 6px 10px;
+  border-radius: 8px;
+  padding: 4px 8px;
   box-shadow: none;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .matrix-controls button.ghost:hover {
-  border-color: #c71f2d;
-  color: #c71f2d;
-  background: transparent;
+  color: #1a1f2b;
+  background: rgba(34, 74, 122, 0.12);
 }
 
 .matrix-controls button.ghost:active {
@@ -3189,17 +3267,16 @@ body.theme-dark .todo-status-menu {
 
 .matrix-controls .matrix-icon-btn {
   background: transparent;
-  border: 1px solid transparent !important;
+  border: none !important;
   box-shadow: none !important;
   outline: none;
-  padding: 6px 8px;
-  font-size: 16px;
+  padding: 4px 8px;
+  font-size: 14px;
   color: #1a1f2b;
 }
 
 .matrix-controls .matrix-icon-btn:hover {
-  background: transparent;
-  border-color: #c71f2d;
+  background: rgba(34, 74, 122, 0.12);
   box-shadow: none;
   transform: none;
 }
@@ -3209,8 +3286,8 @@ body.theme-dark .todo-status-menu {
   border: none !important;
   box-shadow: none !important;
   outline: none;
-  padding: 6px 8px;
-  font-size: 14px;
+  padding: 4px 8px;
+  font-size: 13px;
   color: #1a1f2b;
 }
 
@@ -3218,9 +3295,9 @@ body.theme-dark .todo-status-menu {
   background: transparent;
   border: none !important;
   box-shadow: none !important;
-  padding: 6px 8px;
+  padding: 4px 8px;
   color: #1a1f2b;
-  height: 32px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3280,7 +3357,7 @@ body.theme-dark .todo-status-menu {
 }
 
 .matrix-controls .matrix-flat-btn:hover {
-  background: #eef3ff;
+  background: rgba(34, 74, 122, 0.12);
 }
 
 body.theme-dark .matrix-controls button.ghost,
@@ -3295,13 +3372,57 @@ body.theme-dark .matrix-switch {
 body.theme-dark .matrix-controls button.ghost:hover,
 body.theme-dark .matrix-controls .matrix-icon-btn:hover,
 body.theme-dark .matrix-controls .matrix-flat-btn:hover {
-  border-color: #79a6ff;
-  color: #79a6ff;
-  background: transparent;
+  color: #e6edf5;
+  background: rgba(121, 166, 255, 0.2);
 }
 
 body.theme-dark .matrix-controls #matrixDate {
   border-color: transparent;
+}
+
+body.theme-dark .matrix-controls {
+  background: rgba(20, 28, 38, 0.62);
+}
+
+.report-controls .ghost,
+.report-controls button {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 8px;
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.report-controls .ghost:hover,
+.report-controls button:hover {
+  background: rgba(34, 74, 122, 0.12);
+}
+
+.report-controls input,
+.report-controls select {
+  min-height: 30px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+body.theme-dark .report-panel .panel-header {
+  background: rgba(20, 28, 38, 0.72);
+  border-bottom-color: rgba(42, 59, 82, 0.8);
+}
+
+body.theme-dark .matrix-panel .panel-header {
+  background: rgba(20, 28, 38, 0.72);
+  border-bottom-color: rgba(42, 59, 82, 0.8);
+}
+
+body.theme-dark .report-controls {
+  background: rgba(20, 28, 38, 0.62);
+}
+
+body.theme-dark .report-controls .ghost:hover,
+body.theme-dark .report-controls button:hover {
+  background: rgba(121, 166, 255, 0.2);
 }
 
 body.theme-dark .matrix-attivita-list {
@@ -3397,7 +3518,7 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
   flex-direction: column;
   min-height: 200px;
   position: sticky;
-  top: 80px;
+  top: calc(var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
   align-self: start;
 }
 
@@ -3688,13 +3809,14 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
 
 .matrix-header-row {
   position: sticky;
-  top: var(--matrix-panel-header-height, 64px);
+  top: calc(
+    var(--matrix-panel-header-height, 64px) + var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px) - 1px
+  );
   z-index: 25;
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  border-top: 2px solid #ffffff;
-  position: sticky;
+  border-top: none;
 }
 
 .matrix-header-row .matrix-cell {
@@ -3707,9 +3829,9 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
   position: absolute;
   left: 0;
   right: 0;
-  top: calc(-1 * (var(--matrix-panel-header-height, 64px) + 48px));
-  height: calc(var(--matrix-panel-header-height, 64px) + 48px);
-  background: #ffffff;
+  top: calc(-1 * var(--matrix-panel-header-height, 64px));
+  height: var(--matrix-panel-header-height, 64px);
+  background: var(--card);
   pointer-events: none;
 }
 
@@ -4242,11 +4364,11 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
 }
 .matrix-panel .panel-header {
   position: sticky;
-  top: 0;
+  top: calc(var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
   z-index: 20;
-  background: transparent;
-  padding-top: 12px;
-  padding-bottom: 8px;
+  background: rgba(255, 255, 255, 0.62);
+  padding-top: 2px;
+  padding-bottom: 4px;
   box-shadow: none;
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -4254,6 +4376,7 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
   margin: -16px -16px 0 -16px;
   padding-left: 16px;
   padding-right: 16px;
+  border-bottom: 1px solid rgba(215, 219, 227, 0.7);
 }
 
 .matrix-panel .panel-header::after {
@@ -4263,6 +4386,6 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
   right: 0;
   bottom: -24px;
   height: 24px;
-  background: #ffffff;
+  background: var(--card);
   pointer-events: none;
 }
