@@ -277,6 +277,17 @@
           </div>
           <div id="matrixReportGrid" class="report-grid"></div>
         </section>
+        <section id="todoSection" class="panel todo-panel">
+          <div class="panel-header">
+            <h2>To Dos</h2>
+          </div>
+          <div class="panel-body">
+            <div class="todo-header">
+              <span class="todo-sub">Long press su una cella per “Non necessaria”.</span>
+            </div>
+            <div id="todoGrid" class="todo-grid"></div>
+          </div>
+        </section>
       </main>
     </div>
 
@@ -755,6 +766,10 @@
     </div>
 
     <div id="reportDeptMenu" class="report-dept-menu hidden"></div>
+    <div id="todoStatusMenu" class="todo-status-menu hidden">
+      <button type="button" data-action="set">Non necessaria</button>
+      <button type="button" data-action="clear">Ripristina</button>
+    </div>
 
     <div id="toastStack" class="toast-stack"></div>
     <div id="resetWaitOverlay" class="reset-wait hidden" aria-live="polite">

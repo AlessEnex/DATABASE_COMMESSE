@@ -51,6 +51,9 @@ const state = {
   reportActivitiesMap: new Map(),
   reportActivitiesToken: 0,
   reportActivitiesLoading: false,
+  todoOverridesMap: new Map(),
+  todoOverridesToken: 0,
+  todoOverridesLoading: false,
   reportRangeStart: null,
   reportRangeDays: null,
   reportFilteredCommesse: null,
@@ -373,6 +376,9 @@ const milestoneTransportShipBtn = el("milestoneTransportShipBtn");
 const milestoneTitle = el("milestoneTitle");
 const milestoneDragLabel = el("milestoneDragLabel");
 const reportDeptMenu = el("reportDeptMenu");
+const todoSection = el("todoSection");
+const todoGrid = el("todoGrid");
+const todoStatusMenu = el("todoStatusMenu");
 const MILESTONE_MIN_YEAR = 2024;
 const MILESTONE_MAX_YEAR = 2030;
 const calendarDate = el("calendarDate");
@@ -562,6 +568,10 @@ let commessaQuickFocused = null;
 let quickMenuAttivita = null;
 let confirmResolver = null;
 let confirmAction = null;
+let todoMenuTarget = null;
+let todoLongPressTimer = null;
+let todoLongPressStart = null;
+let todoLastRendered = [];
 let deleteCommessaId = null;
 let detailSnapshot = "";
 let detailDirty = false;
@@ -4342,6 +4352,55 @@ function isLavenderActivity(title) {
   return LAVENDER_ACTIVITIES.has(normalizePhaseKey(title));
 }
 
+function isActivityAllowedForRepartoName(title, repartoName) {
+  if (isAssenteTitle(title)) return false;
+  const key = normalizePhaseKey(title);
+  if (key === "altro") return false;
+  const dept = normalizeDeptKey(repartoName || "");
+  const allowlist = DEPT_ACTIVITY_ALLOWLISTS[dept];
+  if (allowlist) {
+    return allowlist.map(normalizePhaseKey).includes(key);
+  }
+  const allowedDepts = ACTIVITY_DEPT_LIMITS[key];
+  if (!allowedDepts) return true;
+  if (!dept) return false;
+  return allowedDepts.map(normalizeDeptKey).includes(dept);
+}
+
+function getTodoActivityCatalog() {
+  const options = getMatrixAttivitaOptions();
+  const filtered = options.filter(
+    (name) => name && !isAssenteTitle(name) && !isLavenderActivity(name) && normalizePhaseKey(name) !== "altro"
+  );
+  const seen = new Set();
+  const unique = [];
+  filtered.forEach((name) => {
+    const key = normalizePhaseKey(name);
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(name);
+  });
+  return unique;
+}
+
+function getTodoActivityGroups() {
+  const catalog = getTodoActivityCatalog();
+  const reparti = (state.reparti || [])
+    .slice()
+    .filter((r) => {
+      const key = normalizeDeptKey(r.nome || "");
+      return key && key !== "tutti";
+    })
+    .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
+  const groups = [];
+  reparti.forEach((r) => {
+    const acts = catalog.filter((name) => isActivityAllowedForRepartoName(name, r.nome));
+    if (!acts.length) return;
+    groups.push({ reparto: r.nome, attivita: acts });
+  });
+  return groups;
+}
+
 function getDeptBucketByRisorsa(risorsaId) {
   const dept = normalizeDeptKey(getRisorsaDeptName(risorsaId));
   if (dept.includes("CAD")) return "CAD";
@@ -5755,7 +5814,7 @@ function renderMatrixHeader(days) {
   header.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
 
   const empty = document.createElement("div");
-  empty.className = "matrix-cell matrix-header";
+  empty.className = "matrix-cell matrix-header matrix-resource";
   empty.textContent = "Risorsa";
   header.appendChild(empty);
 
@@ -5788,11 +5847,18 @@ function setupMatrixPan(headerRow) {
     if (!cells || cells.length < 2) return;
     const dayRect = cells[1].getBoundingClientRect();
     const dayWidth = Math.max(1, dayRect.width);
+    const panTargets = Array.from(
+      matrixGrid.querySelectorAll(".matrix-cell:not(.matrix-resource), .matrix-activity-bar")
+    );
     matrixPan = {
       startX: e.clientX,
+      startY: e.clientY,
       baseDate: startOfWeek(matrixState.date),
       dayWidth,
+      baseView: matrixState.view,
       moved: false,
+      mode: null,
+      panTargets,
     };
     headerRow.setPointerCapture?.(e.pointerId);
     matrixGrid.classList.add("is-panning");
@@ -5800,27 +5866,54 @@ function setupMatrixPan(headerRow) {
   headerRow.onpointermove = (e) => {
     if (!matrixPan || !matrixGrid) return;
     const dx = e.clientX - matrixPan.startX;
+    const dy = e.clientY - matrixPan.startY;
     if (Math.abs(dx) > 3) matrixPan.moved = true;
-    matrixGrid.style.transform = `translateX(${dx}px)`;
+    if (!matrixPan.mode) {
+      if (Math.abs(dy) > 3 && Math.abs(dy) >= Math.abs(dx)) matrixPan.mode = "zoom";
+      else if (Math.abs(dx) > 3) matrixPan.mode = "pan";
+    }
+    if (matrixPan.mode === "pan") {
+      matrixPan.panTargets.forEach((el) => {
+        el.style.transform = `translateX(${dx}px)`;
+      });
+    }
   };
   headerRow.onpointerup = async (e) => {
     if (!matrixPan) return;
     headerRow.releasePointerCapture?.(e.pointerId);
     const dx = e.clientX - matrixPan.startX;
-    const weekWidth = matrixPan.dayWidth * 5;
-    const shiftWeeks = weekWidth ? Math.round(-dx / weekWidth) : 0;
-    matrixGrid.style.transform = "";
+    const dy = e.clientY - matrixPan.startY;
+    const dayWidth = matrixPan.dayWidth;
+    const shiftDays = dayWidth ? Math.round(-dx / dayWidth) : 0;
+    matrixPan.panTargets.forEach((el) => {
+      el.style.transform = "";
+    });
     matrixGrid.classList.remove("is-panning");
-    const shouldMove = matrixPan.moved && shiftWeeks !== 0;
+    const mode = matrixPan.mode;
+    const shouldMove = matrixPan.moved && mode === "pan" && shiftDays !== 0;
     matrixPan = null;
+    if (mode === "zoom") {
+      const zoomSteps = Math.round(dy / 18);
+      if (zoomSteps === 0) return;
+      const views = ["week", "two", "three", "six"];
+      const currentIndex = Math.max(0, views.indexOf(matrixState.view));
+      const nextIndex = Math.min(views.length - 1, Math.max(0, currentIndex + zoomSteps));
+      matrixState.view = views[nextIndex];
+      matrixState.date = startOfWeek(matrixState.date);
+      setMatrixViewLabel();
+      await loadMatrixAttivita();
+      return;
+    }
     if (!shouldMove) return;
-    matrixState.date = addDays(matrixState.date, shiftWeeks * 7);
+    matrixState.date = addDays(matrixState.date, shiftDays);
     if (matrixDate) matrixDate.value = formatDateInput(matrixState.date);
     await loadMatrixAttivita();
   };
   headerRow.onpointerleave = () => {
     if (!matrixPan) return;
-    matrixGrid.style.transform = "";
+    matrixPan.panTargets.forEach((el) => {
+      el.style.transform = "";
+    });
     matrixGrid.classList.remove("is-panning");
     matrixPan = null;
   };
@@ -5871,6 +5964,7 @@ function renderAssignActivities() {
   const options = Array.from(matrixAttivita.options)
     .map((o) => o.value)
     .filter((v) => v && !isAssenteTitle(v))
+    .filter((v) => !isLavenderActivity(v) || normalizePhaseKey(v) === "altro")
     .filter((v) => !risorsaId || isActivityAllowedForRisorsa(v, risorsaId));
   options.forEach((name) => {
     const btn = document.createElement("button");
@@ -6226,10 +6320,6 @@ function renderMatrix() {
       });
       bar.addEventListener("mousedown", (e) => {
         if (!state.canWrite) return;
-        if (!canMoveMatrixActivity(b.a, b.a.risorsa_id)) {
-          setStatus("Non autorizzato a spostare attivita.", "error");
-          return;
-        }
         if (matrixState.resizing) return;
         if (e.button !== 0) return;
         cancelCommessaHighlightTimer();
@@ -6375,6 +6465,7 @@ function renderMatrixReport() {
 
   if (!commesse.length) {
     matrixReportGrid.innerHTML = `<div class="matrix-empty">Nessuna commessa trovata.</div>`;
+    renderTodoSection(commesse);
     return;
   }
 
@@ -6382,6 +6473,7 @@ function renderMatrixReport() {
     matrixReportGrid.innerHTML =
       `<div class="matrix-empty">Troppe commesse (${commesse.length}). ` +
       `Applica un filtro per visualizzare la reportistica.</div>`;
+    renderTodoSection(commesse);
     return;
   }
 
@@ -6390,6 +6482,11 @@ function renderMatrixReport() {
   if (missingSchedules && !state.reportActivitiesLoading) {
     loadReportActivitiesFor(commesse);
   }
+  const missingOverrides = commesse.some((c) => !state.todoOverridesMap.has(String(c.id)));
+  if (missingOverrides && !state.todoOverridesLoading) {
+    loadTodoOverridesFor(commesse);
+  }
+  renderTodoSection(commesse);
   if (state.reportView === "gantt") {
     renderReportGantt(commesse, today);
     return;
@@ -6629,10 +6726,10 @@ async function loadReportActivitiesFor(commesse) {
   if (!PREFER_REST_ON_RELOAD) {
     try {
       const result = await withTimeout(
-        supabase
-          .from("attivita")
-          .select("id, commessa_id, titolo, risorsa_id, reparto_id, data_inizio, data_fine")
-          .in("commessa_id", ids),
+          supabase
+            .from("attivita")
+            .select("id, commessa_id, titolo, risorsa_id, reparto_id, data_inizio, data_fine, stato")
+            .in("commessa_id", ids),
         FETCH_TIMEOUT_MS
       );
       rows = result.data;
@@ -6645,10 +6742,10 @@ async function loadReportActivitiesFor(commesse) {
   if (!rows || error) {
     debugLog("loadReportActivities fallback REST");
     const inList = ids.join(",");
-    rows = await fetchTableViaRest(
-      "attivita",
-      `select=id,commessa_id,titolo,risorsa_id,reparto_id,data_inizio,data_fine&commessa_id=in.(${inList})`
-    );
+      rows = await fetchTableViaRest(
+        "attivita",
+        `select=id,commessa_id,titolo,risorsa_id,reparto_id,data_inizio,data_fine,stato&commessa_id=in.(${inList})`
+      );
   }
 
   if (!rows || token !== state.reportActivitiesToken) return;
@@ -6668,18 +6765,19 @@ async function loadReportActivitiesFor(commesse) {
         : row.reparto_id != null
         ? getDeptBucketByRepartoId(row.reparto_id)
         : "ALTRO";
-    list.push({
-      id: row.id,
-      risorsaId: row.risorsa_id,
-      titolo: row.titolo || "Attivita",
-      risorsa:
-        row.risorsa_id != null
-          ? risorseById.get(String(row.risorsa_id)) || `Risorsa ${row.risorsa_id}`
-          : "Risorsa n/d",
-      dept,
-      start: row.data_inizio ? new Date(row.data_inizio) : null,
-      end: row.data_fine ? new Date(row.data_fine) : null,
-    });
+      list.push({
+        id: row.id,
+        risorsaId: row.risorsa_id,
+        titolo: row.titolo || "Attivita",
+        risorsa:
+          row.risorsa_id != null
+            ? risorseById.get(String(row.risorsa_id)) || `Risorsa ${row.risorsa_id}`
+            : "Risorsa n/d",
+        dept,
+        start: row.data_inizio ? new Date(row.data_inizio) : null,
+        end: row.data_fine ? new Date(row.data_fine) : null,
+        stato: row.stato || "pianificata",
+      });
     map.set(key, list);
   });
   map.forEach((list, key) => {
@@ -6696,6 +6794,296 @@ async function loadReportActivitiesFor(commesse) {
   state.reportActivitiesMap = map;
   state.reportActivitiesLoading = false;
   renderMatrixReport();
+}
+
+async function loadTodoOverridesFor(commesse) {
+  if (!commesse || !commesse.length) {
+    state.todoOverridesMap = new Map();
+    return;
+  }
+  if (commesse.length > REPORT_MAX_ITEMS) {
+    state.todoOverridesMap = new Map();
+    return;
+  }
+  const token = ++state.todoOverridesToken;
+  state.todoOverridesLoading = true;
+  const ids = Array.from(new Set(commesse.map((c) => c.id))).filter(Boolean);
+  if (!ids.length) {
+    state.todoOverridesMap = new Map();
+    state.todoOverridesLoading = false;
+    return;
+  }
+
+  let rows = null;
+  let error = null;
+  if (!PREFER_REST_ON_RELOAD) {
+    try {
+      const result = await withTimeout(
+        supabase
+          .from("commessa_attivita_override")
+          .select("commessa_id, titolo, stato")
+          .in("commessa_id", ids),
+        FETCH_TIMEOUT_MS
+      );
+      rows = result.data;
+      error = result.error;
+    } catch (err) {
+      debugLog(`loadTodoOverrides timeout: ${err?.message || err}`);
+    }
+  }
+
+  if (!rows || error) {
+    debugLog("loadTodoOverrides fallback REST");
+    const inList = ids.join(",");
+    rows = await fetchTableViaRest(
+      "commessa_attivita_override",
+      `select=commessa_id,titolo,stato&commessa_id=in.(${inList})`
+    );
+  }
+
+  if (!rows || token !== state.todoOverridesToken) return;
+
+  const map = new Map();
+  ids.forEach((id) => {
+    map.set(String(id), new Map());
+  });
+  rows.forEach((row) => {
+    if (!row.commessa_id || !row.titolo) return;
+    const key = String(row.commessa_id);
+    const list = map.get(key) || new Map();
+    list.set(normalizePhaseKey(row.titolo), row.stato || "non_necessaria");
+    map.set(key, list);
+  });
+  state.todoOverridesMap = map;
+  state.todoOverridesLoading = false;
+  renderTodoSection(todoLastRendered);
+}
+
+function getTodoOverrideStatus(commessaId, title) {
+  const key = String(commessaId);
+  const list = state.todoOverridesMap.get(key);
+  if (!list) return null;
+  return list.get(normalizePhaseKey(title)) || null;
+}
+
+function getTodoStatusFor(commessaId, title) {
+  const override = getTodoOverrideStatus(commessaId, title);
+  if (override === "non_necessaria") return "non_necessaria";
+  const entries = state.reportActivitiesMap.get(String(commessaId)) || [];
+  const key = normalizePhaseKey(title);
+  const matching = entries.filter((e) => normalizePhaseKey(e.titolo) === key);
+  if (!matching.length) return "da_schedulare";
+  if (matching.some((e) => normalizePhaseKey(e.stato) === "completata")) return "fatta";
+  return "schedulata";
+}
+
+function renderTodoSection(commesse) {
+  if (!todoSection || !todoGrid) return;
+  todoLastRendered = commesse || [];
+  if (!state.session) {
+    todoGrid.innerHTML = `<div class="report-empty">Accedi per vedere i To Dos.</div>`;
+    return;
+  }
+  if (!commesse || !commesse.length) {
+    todoGrid.innerHTML = `<div class="report-empty">Nessuna commessa.</div>`;
+    return;
+  }
+  if (commesse.length > REPORT_MAX_ITEMS) {
+    todoGrid.innerHTML = `<div class="report-empty">Troppe commesse (${commesse.length}).</div>`;
+    return;
+  }
+
+  const groups = getTodoActivityGroups();
+  if (!groups.length) {
+    todoGrid.innerHTML = `<div class="report-empty">Nessuna attivita disponibile.</div>`;
+    return;
+  }
+
+  const missingData =
+    state.reportActivitiesLoading ||
+    state.todoOverridesLoading ||
+    commesse.some(
+      (c) => !state.reportActivitiesMap.has(String(c.id)) || !state.todoOverridesMap.has(String(c.id))
+    );
+  if (missingData) {
+    todoGrid.innerHTML = `<div class="report-empty">Caricamento To Dos...</div>`;
+    return;
+  }
+
+  const columns = [];
+  groups.forEach((g) => {
+    g.attivita.forEach((name) => {
+      columns.push({ reparto: g.reparto, titolo: name });
+    });
+  });
+
+  const table = document.createElement("div");
+  table.className = "todo-table";
+  table.style.gridTemplateColumns = `240px repeat(${columns.length}, minmax(120px, 1fr))`;
+
+  const headerBlank = document.createElement("div");
+  headerBlank.className = "todo-cell todo-head";
+  headerBlank.style.gridRow = "1";
+  headerBlank.style.gridColumn = "1";
+  headerBlank.textContent = "";
+  table.appendChild(headerBlank);
+
+  let colStart = 2;
+  groups.forEach((group) => {
+    const cell = document.createElement("div");
+    cell.className = "todo-cell todo-head todo-group";
+    cell.style.gridRow = "1";
+    cell.style.gridColumn = `${colStart} / span ${group.attivita.length}`;
+    cell.textContent = group.reparto;
+    table.appendChild(cell);
+    colStart += group.attivita.length;
+  });
+
+  const commessaHeader = document.createElement("div");
+  commessaHeader.className = "todo-cell todo-head";
+  commessaHeader.style.gridRow = "2";
+  commessaHeader.style.gridColumn = "1";
+  commessaHeader.textContent = "Commessa";
+  table.appendChild(commessaHeader);
+
+  colStart = 2;
+  columns.forEach((col) => {
+    const cell = document.createElement("div");
+    cell.className = "todo-cell todo-head todo-activity-head";
+    cell.style.gridRow = "2";
+    cell.style.gridColumn = String(colStart);
+    cell.textContent = col.titolo;
+    table.appendChild(cell);
+    colStart += 1;
+  });
+
+  commesse.forEach((commessa, idx) => {
+    const rowIndex = idx + 3;
+    const info = document.createElement("div");
+    info.className = "todo-cell todo-commessa";
+    info.style.gridRow = String(rowIndex);
+    info.style.gridColumn = "1";
+    info.innerHTML = `<div>${commessa.codice || ""}</div><div class="todo-meta">${commessa.titolo || ""}</div>`;
+    table.appendChild(info);
+
+    colStart = 2;
+    columns.forEach((col) => {
+      const status = getTodoStatusFor(commessa.id, col.titolo);
+      const cell = document.createElement("div");
+      cell.className = "todo-cell";
+      cell.style.gridRow = String(rowIndex);
+      cell.style.gridColumn = String(colStart);
+      const statusLabel =
+        status === "fatta"
+          ? "Fatta"
+          : status === "schedulata"
+          ? "Schedulata"
+          : status === "non_necessaria"
+          ? "Non necessaria"
+          : "Da schedulare";
+      const statusClass =
+        status === "fatta"
+          ? "todo-fatta"
+          : status === "schedulata"
+          ? "todo-schedulata"
+          : status === "non_necessaria"
+          ? "todo-non-necessaria"
+          : "todo-da-schedulare";
+      cell.innerHTML = `<span class="todo-status ${statusClass}">${statusLabel}</span>`;
+      cell.dataset.commessaId = commessa.id;
+      cell.dataset.attivita = col.titolo;
+      cell.addEventListener("pointerdown", (event) => {
+        if (!state.canWrite) return;
+        todoLongPressStart = { x: event.clientX, y: event.clientY };
+        clearTimeout(todoLongPressTimer);
+        todoLongPressTimer = window.setTimeout(() => {
+          openTodoStatusMenu(cell, event.clientX, event.clientY);
+        }, 550);
+      });
+      cell.addEventListener("pointerup", () => clearTimeout(todoLongPressTimer));
+      cell.addEventListener("pointerleave", () => clearTimeout(todoLongPressTimer));
+      cell.addEventListener("pointercancel", () => clearTimeout(todoLongPressTimer));
+      cell.addEventListener("contextmenu", (event) => {
+        if (!state.canWrite) return;
+        event.preventDefault();
+        openTodoStatusMenu(cell, event.clientX, event.clientY);
+      });
+      table.appendChild(cell);
+      colStart += 1;
+    });
+  });
+
+  todoGrid.innerHTML = "";
+  todoGrid.appendChild(table);
+}
+
+function openTodoStatusMenu(cell, x, y) {
+  if (!todoStatusMenu || !cell) return;
+  const commessaId = cell.dataset.commessaId;
+  const titolo = cell.dataset.attivita;
+  if (!commessaId || !titolo) return;
+  todoMenuTarget = { commessaId, titolo };
+  const isNonNec = getTodoOverrideStatus(commessaId, titolo) === "non_necessaria";
+  const setBtn = todoStatusMenu.querySelector('[data-action="set"]');
+  const clearBtn = todoStatusMenu.querySelector('[data-action="clear"]');
+  if (setBtn) setBtn.disabled = isNonNec;
+  if (clearBtn) clearBtn.disabled = !isNonNec;
+  todoStatusMenu.classList.remove("hidden");
+  const padding = 10;
+  let left = x + 8;
+  let top = y + 8;
+  todoStatusMenu.style.left = `${left}px`;
+  todoStatusMenu.style.top = `${top}px`;
+  requestAnimationFrame(() => {
+    const rect = todoStatusMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth - padding) {
+      left = Math.max(padding, window.innerWidth - rect.width - padding);
+    }
+    if (rect.bottom > window.innerHeight - padding) {
+      top = Math.max(padding, window.innerHeight - rect.height - padding);
+    }
+    todoStatusMenu.style.left = `${left}px`;
+    todoStatusMenu.style.top = `${top}px`;
+  });
+}
+
+function closeTodoStatusMenu() {
+  if (!todoStatusMenu) return;
+  todoStatusMenu.classList.add("hidden");
+  todoMenuTarget = null;
+}
+
+async function setTodoOverride(commessaId, titolo, enabled) {
+  if (!commessaId || !titolo) return;
+  if (!state.canWrite) return;
+  if (enabled) {
+    const { error } = await supabase
+      .from("commessa_attivita_override")
+      .upsert({ commessa_id: commessaId, titolo, stato: "non_necessaria" }, { onConflict: "commessa_id,titolo" });
+    if (error) {
+      setStatus(`Update error: ${error.message}`, "error");
+      return;
+    }
+  } else {
+    const { error } = await supabase
+      .from("commessa_attivita_override")
+      .delete()
+      .eq("commessa_id", commessaId)
+      .eq("titolo", titolo);
+    if (error) {
+      setStatus(`Update error: ${error.message}`, "error");
+      return;
+    }
+  }
+  const key = String(commessaId);
+  const list = state.todoOverridesMap.get(key) || new Map();
+  if (enabled) {
+    list.set(normalizePhaseKey(titolo), "non_necessaria");
+  } else {
+    list.delete(normalizePhaseKey(titolo));
+  }
+  state.todoOverridesMap.set(key, list);
+  renderTodoSection(todoLastRendered);
 }
 
 function renderReportGantt(commesse, today) {
@@ -7397,6 +7785,7 @@ function setupReportPanZoom(track, headerContent, { rangeStart, rangeDays, bound
       boundsStart,
       boundsEnd,
       moved: false,
+      mode: null,
     };
     track.classList.add("is-dragging");
     track.setPointerCapture?.(e.pointerId);
@@ -7406,9 +7795,13 @@ function setupReportPanZoom(track, headerContent, { rangeStart, rangeDays, bound
     const dx = e.clientX - reportPanZoom.startX;
     const dy = e.clientY - reportPanZoom.startY;
     if (Math.abs(dx) > 3 || Math.abs(dy) > 3) reportPanZoom.moved = true;
+    if (!reportPanZoom.mode) {
+      if (Math.abs(dy) > 3 && Math.abs(dy) >= Math.abs(dx)) reportPanZoom.mode = "zoom";
+      else if (Math.abs(dx) > 3) reportPanZoom.mode = "pan";
+    }
     const daysPerPx = reportPanZoom.baseDays / Math.max(1, reportPanZoom.rect.width);
-    const shiftDays = Math.round(-dx * daysPerPx);
-    const zoomSteps = Math.round(dy / 18);
+    const shiftDays = reportPanZoom.mode === "pan" ? Math.round(-dx * daysPerPx) : 0;
+    const zoomSteps = reportPanZoom.mode === "zoom" ? Math.round(dy / 18) : 0;
     let newDays = reportPanZoom.baseDays + zoomSteps * 8;
     newDays = Math.min(REPORT_MAX_DAYS, Math.max(REPORT_MIN_DAYS, newDays));
     const center = addBusinessDays(reportPanZoom.baseStart, Math.round(reportPanZoom.baseDays / 2));
@@ -8429,28 +8822,12 @@ matrixDate.addEventListener("change", async (e) => {
   await loadMatrixAttivita();
 });
 matrixPrevBtn.addEventListener("click", async () => {
-  const step =
-    matrixState.view === "six"
-      ? 42
-      : matrixState.view === "three"
-      ? 21
-      : matrixState.view === "two"
-      ? 14
-      : 7;
-  matrixState.date = addDays(matrixState.date, -step);
+  matrixState.date = addDays(matrixState.date, -7);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
 });
 matrixNextBtn.addEventListener("click", async () => {
-  const step =
-    matrixState.view === "six"
-      ? 42
-      : matrixState.view === "three"
-      ? 21
-      : matrixState.view === "two"
-      ? 14
-      : 7;
-  matrixState.date = addDays(matrixState.date, step);
+  matrixState.date = addDays(matrixState.date, 7);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
 });
@@ -8790,6 +9167,24 @@ document.addEventListener("drop", () => {
   closeMatrixQuickMenu();
   if (matrixTrash) matrixTrash.classList.remove("is-dragover");
 });
+if (todoStatusMenu) {
+  todoStatusMenu.addEventListener("click", async (event) => {
+    const target = event.target.closest("button");
+    if (!target || !todoMenuTarget) return;
+    const action = target.dataset.action;
+    if (action === "set") {
+      await setTodoOverride(todoMenuTarget.commessaId, todoMenuTarget.titolo, true);
+      closeTodoStatusMenu();
+    }
+    if (action === "clear") {
+      await setTodoOverride(todoMenuTarget.commessaId, todoMenuTarget.titolo, false);
+      closeTodoStatusMenu();
+    }
+  });
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeTodoStatusMenu();
+});
 document.addEventListener("click", (e) => {
   if (matrixQuickMenu && !matrixQuickMenu.classList.contains("hidden")) {
     if (!e.target.closest("#matrixQuickMenu")) {
@@ -8809,6 +9204,11 @@ document.addEventListener("click", (e) => {
   if (milestonePicker && !milestonePicker.classList.contains("hidden")) {
     if (!e.target.closest("#milestonePicker")) {
       closeMilestonePicker();
+    }
+  }
+  if (todoStatusMenu && !todoStatusMenu.classList.contains("hidden")) {
+    if (!e.target.closest("#todoStatusMenu")) {
+      closeTodoStatusMenu();
     }
   }
   if (commessaLongPressSuppress) {

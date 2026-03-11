@@ -21,7 +21,7 @@ begin
     create type ruolo_assegnazione as enum ('owner', 'collaboratore');
   end if;
   if not exists (select 1 from pg_type where typname = 'attivita_stato') then
-    create type attivita_stato as enum ('pianificata', 'in_corso', 'completata', 'annullata');
+    create type attivita_stato as enum ('pianificata', 'in_corso', 'completata', 'annullata', 'non_necessaria');
   end if;
 end $$;
 
@@ -173,6 +173,17 @@ create table if not exists attivita (
   constraint attivita_time_check check (data_fine >= data_inizio)
 );
 
+create table if not exists commessa_attivita_override (
+  commessa_id uuid not null references commesse(id) on delete cascade,
+  titolo text not null,
+  stato attivita_stato not null,
+  updated_at timestamptz not null default now(),
+  primary key (commessa_id, titolo),
+  constraint commessa_attivita_override_only_non_necessaria check (stato::text = 'non_necessaria')
+);
+
+create index if not exists idx_commessa_attivita_override_commessa on commessa_attivita_override (commessa_id);
+
 -- Auth helpers (Supabase)
 -- Returns true if the current user's email is in whitelist_email and active.
 create or replace function is_whitelisted_email()
@@ -300,7 +311,7 @@ as $$
 $$;
 
 create or replace function can_edit_attivita(target_risorsa_id smallint)
-returns boolean
+  returns boolean
 language sql
 stable
 security definer
@@ -313,6 +324,34 @@ as $$
       and (
         u.ruolo in ('admin', 'responsabile')
         or (u.ruolo = 'operatore' and current_risorsa_id() = target_risorsa_id)
+      )
+    ) and is_whitelisted_email();
+  $$;
+
+create or replace function can_edit_attivita_row(
+  target_attivita_id uuid,
+  target_risorsa_id smallint,
+  target_assegnato_a uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, auth
+as $$
+  select exists (
+    select 1
+    from public.utenti u
+    where u.id = auth.uid()
+      and (
+        u.ruolo in ('admin', 'responsabile')
+        or (
+          u.ruolo = 'operatore'
+          and (
+            current_risorsa_id() = target_risorsa_id
+            or target_assegnato_a = auth.uid()
+          )
+        )
       )
   ) and is_whitelisted_email();
 $$;
@@ -492,6 +531,7 @@ alter table assegnazioni enable row level security;
 alter table whitelist_email enable row level security;
 alter table log_commessa enable row level security;
 alter table attivita enable row level security;
+alter table commessa_attivita_override enable row level security;
 
 -- Policies: whitelisted users can read/write operational tables
 drop policy if exists commesse_select on commesse;
@@ -600,9 +640,21 @@ drop policy if exists attivita_write on attivita;
 create policy attivita_write on attivita
   for insert with check (can_edit_attivita(risorsa_id));
 create policy attivita_update on attivita
-  for update using (can_edit_attivita(risorsa_id)) with check (can_edit_attivita(risorsa_id));
+  for update using (can_edit_attivita_row(id, risorsa_id, assegnato_a))
+    with check (can_edit_attivita_row(id, risorsa_id, assegnato_a));
 create policy attivita_delete on attivita
-  for delete using (can_edit_attivita(risorsa_id));
+  for delete using (can_edit_attivita_row(id, risorsa_id, assegnato_a));
+
+drop policy if exists commessa_attivita_override_select on commessa_attivita_override;
+create policy commessa_attivita_override_select on commessa_attivita_override
+  for select using (is_whitelisted_email());
+drop policy if exists commessa_attivita_override_write on commessa_attivita_override;
+create policy commessa_attivita_override_write on commessa_attivita_override
+  for insert with check (can_write());
+create policy commessa_attivita_override_update on commessa_attivita_override
+  for update using (can_write()) with check (can_write());
+create policy commessa_attivita_override_delete on commessa_attivita_override
+  for delete using (can_write());
 
 -- Policies: whitelist management is admin-only (readable by whitelisted)
 drop policy if exists whitelist_select on whitelist_email;
