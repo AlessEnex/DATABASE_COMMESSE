@@ -41,6 +41,9 @@ const state = {
   commessaRisorseToken: 0,
   commesseFiltersActive: false,
   risorse: [],
+  utenti: [],
+  permessiByRuolo: new Map(),
+  permessi: {},
   selected: null,
   canWrite: false,
   realtime: null,
@@ -73,6 +76,12 @@ const authDot = el("authDot");
 const resetPasswordBtn = el("resetPasswordBtn");
 const resetPasswordFeedback = el("resetPasswordFeedback");
 const toastStack = el("toastStack");
+const resetWaitOverlay = el("resetWaitOverlay");
+const resetWaitCountdown = el("resetWaitCountdown");
+const resetWaitCloseBtn = el("resetWaitCloseBtn");
+const topbarMenu = el("topbarMenu");
+const topbarMenuToggle = el("topbarMenuToggle");
+const permissionsLink = el("permissionsLink");
 
 const DEBUG_AUTH = new URLSearchParams(window.location.search).get("debug") === "1";
 let debugPanel = null;
@@ -91,11 +100,12 @@ const debugLog = (message) => {
   debugPanel.textContent = `[${time}] ${message}\n` + debugPanel.textContent;
 };
 
-const RESET_COOLDOWN_MS = 60_000;
+const RESET_COOLDOWN_MS = 300_000;
 const RESET_COOLDOWN_KEY = "commesse_reset_cooldown_until";
 const THEME_KEY = "commesse_theme";
 
 let resetCooldownTimer = null;
+let resetWaitTimer = null;
 
 const setResetFeedback = (message, tone = "") => {
   if (!resetPasswordFeedback) return;
@@ -108,7 +118,7 @@ const setResetFeedback = (message, tone = "") => {
 function applyTheme(theme) {
   document.body.classList.toggle("theme-dark", theme === "dark");
   if (themeToggleBtn) {
-    themeToggleBtn.textContent = theme === "dark" ? "🌑" : "🌕";
+    themeToggleBtn.textContent = theme === "dark" ? "Dark" : "Light";
     themeToggleBtn.title = theme === "dark" ? "Tema notte" : "Tema giorno";
     themeToggleBtn.setAttribute("aria-label", theme === "dark" ? "Tema notte" : "Tema giorno");
   }
@@ -138,6 +148,7 @@ function getDetailSnapshot() {
     priorita: d.priorita?.value || "",
     data_ingresso: d.data_ingresso?.value || "",
     data_ordine_telaio: d.data_ordine_telaio?.value || "",
+    data_arrivo_kit_cavi: d.data_arrivo_kit_cavi?.value || "",
     data_prelievo: d.data_prelievo_materiali?.value || "",
     data_consegna: d.data_consegna?.value || "",
     note: d.note?.value || "",
@@ -227,12 +238,46 @@ const updateResetCooldownUI = (showMessage = false) => {
   }
 };
 
+const formatCountdown = (ms) => {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+};
+
+const hideResetWaitOverlay = () => {
+  if (resetWaitTimer) {
+    clearInterval(resetWaitTimer);
+    resetWaitTimer = null;
+  }
+  if (resetWaitOverlay) resetWaitOverlay.classList.add("hidden");
+  document.body.classList.remove("reset-waiting");
+};
+
+const showResetWaitOverlay = (durationMs = RESET_COOLDOWN_MS) => {
+  if (!resetWaitOverlay) return;
+  const endAt = Date.now() + durationMs;
+  document.body.classList.add("reset-waiting");
+  resetWaitOverlay.classList.remove("hidden");
+
+  const tick = () => {
+    const remaining = endAt - Date.now();
+    if (resetWaitCountdown) resetWaitCountdown.textContent = formatCountdown(remaining);
+    if (remaining <= 0) hideResetWaitOverlay();
+  };
+
+  tick();
+  if (resetWaitTimer) clearInterval(resetWaitTimer);
+  resetWaitTimer = setInterval(tick, 1000);
+};
+
 const commesseList = el("commesseList");
 const descriptionFilter = el("descriptionFilter");
 const numberFilter = el("numberFilter");
 const yearFilter = el("yearFilter");
 const openImportBtn = el("openImportBtn");
 const openImportDatesBtn = el("openImportDatesBtn");
+const openImportProductionBtn = el("openImportProductionBtn");
 const commessePanel = el("commessePanel");
 const commessePanelBody = el("commessePanelBody");
 const commesseToggleBtn = el("commesseToggleBtn");
@@ -285,6 +330,7 @@ const matrixQuickMenu = el("matrixQuickMenu");
 const matrixQuickToggleBtn = el("matrixQuickToggleBtn");
 const matrixQuickInfo = el("matrixQuickInfo");
 const resourcesList = el("resourcesList");
+const usersList = el("usersList");
 const resourceForm = el("resourceForm");
 const resourceName = el("resourceName");
 const resourceReparto = el("resourceReparto");
@@ -300,6 +346,11 @@ const importDatesTextarea = el("importDatesTextarea");
 const importDatesPreview = el("importDatesPreview");
 const importDatesCommitBtn = el("importDatesCommitBtn");
 const closeImportDatesBtn = el("closeImportDatesBtn");
+const importProductionModal = el("importProductionModal");
+const importProductionTextarea = el("importProductionTextarea");
+const importProductionPreview = el("importProductionPreview");
+const importProductionCommitBtn = el("importProductionCommitBtn");
+const closeImportProductionBtn = el("closeImportProductionBtn");
 const backupModal = el("backupModal");
 const openBackupBtn = el("openBackupBtn");
 const closeBackupBtn = el("closeBackupBtn");
@@ -435,6 +486,7 @@ const d = {
   data_ordine_telaio: el("d_data_ordine_telaio"),
   telaio_ordinato: el("d_telaio_ordinato"),
   data_consegna_telaio_effettiva: el("d_data_consegna_telaio_effettiva"),
+  data_arrivo_kit_cavi: el("d_data_arrivo_kit_cavi"),
   data_prelievo_materiali: el("d_data_prelievo_materiali"),
   data_consegna: el("d_data_consegna"),
   note: el("d_note"),
@@ -547,6 +599,34 @@ function updateCommessaInState(commessaId, patch) {
     if (filtered) Object.assign(filtered, patch);
   }
   return target;
+}
+
+function isPlannerRole() {
+  if (!state.profile) return false;
+  return String(state.profile.ruolo || "").trim().toLowerCase() === "planner";
+}
+
+async function updateCommessaPlannerDates(commessaId, patch) {
+  const commessa = state.commesse.find((c) => c.id === commessaId);
+  const ordine = patch.data_ordine_telaio ?? commessa?.data_ordine_telaio ?? null;
+  const consegna = patch.data_consegna_macchina ?? commessa?.data_consegna_macchina ?? null;
+  const kit = patch.data_arrivo_kit_cavi ?? commessa?.data_arrivo_kit_cavi ?? null;
+  const prelievo = patch.data_prelievo ?? commessa?.data_prelievo ?? null;
+  const { error } = await supabase.rpc("update_commessa_planner_dates", {
+    p_commessa_id: commessaId,
+    p_data_ordine_telaio: ordine || null,
+    p_data_consegna_macchina: consegna || null,
+    p_data_arrivo_kit_cavi: kit || null,
+    p_data_prelievo: prelievo || null,
+  });
+  if (error) return error;
+  updateCommessaInState(commessaId, {
+    data_ordine_telaio: ordine || null,
+    data_consegna_macchina: consegna || null,
+    data_arrivo_kit_cavi: kit || null,
+    data_prelievo: prelievo || null,
+  });
+  return null;
 }
 
 function applyCommessaHighlight(commessaId) {
@@ -1154,6 +1234,10 @@ async function saveActivityDuration() {
 async function deleteActivity() {
   const attivita = matrixState.editingAttivita;
   if (!attivita) return;
+  if (!canDeleteMatrixActivity(attivita)) {
+    setStatus("Non autorizzato a eliminare attivita.", "error");
+    return;
+  }
   await openConfirmModal("Eliminare questa attivita?", async () => {
     const { error } = await supabase.from("attivita").delete().eq("id", attivita.id);
     if (error) {
@@ -1168,6 +1252,11 @@ async function deleteActivity() {
 
 async function deleteActivityById(id) {
   if (!id) return;
+  const attivita = matrixState.attivita.find((x) => String(x.id) === String(id));
+  if (!canDeleteMatrixActivity(attivita)) {
+    setStatus("Non autorizzato a eliminare attivita.", "error");
+    return;
+  }
   await openConfirmModal("Eliminare questa attivita?", async () => {
     const { error } = await supabase.from("attivita").delete().eq("id", id);
     if (error) {
@@ -1258,6 +1347,7 @@ function closeAssignModal() {
 function openResourcesModal() {
   if (!resourcesModal) return;
   resourcesModal.classList.remove("hidden");
+  loadUsers();
 }
 
 function closeResourcesModal() {
@@ -1497,7 +1587,7 @@ function setStatus(message, type = "info") {
   statusTimer = setTimeout(() => {
     statusMsg.classList.remove("ok", "error");
     statusMsg.classList.add("hidden");
-  }, 4000);
+  }, 12000);
 }
 
 const withTimeout = (promise, ms) =>
@@ -1580,10 +1670,14 @@ async function syncSignedIn(session) {
       syncSignedOut();
       return;
     }
+    debugLog("syncSignedIn step: loadPermessi");
+    await loadPermessi();
     debugLog("syncSignedIn step: loadReparti");
     await loadReparti();
     debugLog("syncSignedIn step: loadRisorse");
     await loadRisorse();
+    debugLog("syncSignedIn step: loadUtenti");
+    await loadUtenti();
     debugLog("syncSignedIn step: loadCommesse");
     await loadCommesse();
     calendarDate.value = formatDateInput(calendarState.date);
@@ -1611,6 +1705,8 @@ function syncSignedOut() {
   authStatus.textContent = "Non autenticato";
   logoutBtn.classList.add("hidden");
   if (setPasswordBtn) setPasswordBtn.classList.add("hidden");
+  if (openResourcesBtn) openResourcesBtn.classList.add("hidden");
+  if (permissionsLink) permissionsLink.classList.add("hidden");
   if (authActions) authActions.classList.remove("is-authenticated");
   if (authDot) authDot.classList.add("hidden");
   setRoleBadge("");
@@ -1656,6 +1752,60 @@ function setRoleBadge(text) {
   roleBadge.textContent = text.toUpperCase();
 }
 
+function canPermission(key) {
+  if (!state.profile) return false;
+  const role = String(state.profile.ruolo || "").trim().toLowerCase();
+  if (role === "admin") return true;
+  return Boolean(state.permessi?.[key]);
+}
+
+function getOwnRisorsaId() {
+  if (!state.profile) return null;
+  const match = state.risorse.find((r) => String(r.utente_id || "") === String(state.profile.id));
+  return match ? match.id : null;
+}
+
+function canMoveMatrixActivity(activity, targetRisorsaId = null) {
+  if (!state.profile) return false;
+  const role = String(state.profile.ruolo || "").trim().toLowerCase();
+  if (role === "admin" || role === "responsabile") return Boolean(state.permessi?.can_move_matrix);
+  if (role === "operatore") {
+    if (!state.permessi?.can_move_matrix) return false;
+    const ownId = getOwnRisorsaId();
+    if (!ownId) return false;
+    const activityOk = activity ? String(activity.risorsa_id) === String(ownId) : true;
+    const targetOk = targetRisorsaId ? String(targetRisorsaId) === String(ownId) : true;
+    return activityOk && targetOk;
+  }
+  return false;
+}
+
+function canDeleteMatrixActivity(activity) {
+  if (!state.profile) return false;
+  const role = String(state.profile.ruolo || "").trim().toLowerCase();
+  if (role === "admin" || role === "responsabile") return Boolean(state.permessi?.can_delete_matrix);
+  if (role === "operatore") {
+    if (!state.permessi?.can_delete_matrix) return false;
+    const ownId = getOwnRisorsaId();
+    if (!ownId) return false;
+    return activity ? String(activity.risorsa_id) === String(ownId) : false;
+  }
+  return false;
+}
+
+function canEditGanttMilestone(field) {
+  if (!state.profile) return false;
+  const role = String(state.profile.ruolo || "").trim().toLowerCase();
+  if (!canPermission("can_move_gantt")) return false;
+  if (role === "admin") return true;
+  if (role === "planner")
+    return field === "ordine" || field === "consegna" || field === "kit_cavi" || field === "prelievo";
+  if (field === "ordine" || field === "consegna") return false;
+  if (field === "kit_cavi") return role === "responsabile";
+  if (field === "ordine_pianificato") return role === "responsabile";
+  return true;
+}
+
 function setWriteAccess(canWrite) {
   state.canWrite = canWrite;
   const disabled = !canWrite;
@@ -1670,6 +1820,8 @@ function setWriteAccess(canWrite) {
   openImportBtn.disabled = disabled;
   if (importDatesCommitBtn) importDatesCommitBtn.disabled = disabled;
   if (openImportDatesBtn) openImportDatesBtn.disabled = disabled;
+  if (importProductionCommitBtn) importProductionCommitBtn.disabled = disabled;
+  if (openImportProductionBtn) openImportProductionBtn.disabled = disabled;
   if (openNewCommessaBtn) openNewCommessaBtn.disabled = disabled;
   if (matrixCommessa) matrixCommessa.disabled = disabled;
   if (matrixAttivita) matrixAttivita.disabled = disabled;
@@ -1785,6 +1937,7 @@ async function resetPassword() {
     ""
   );
   updateResetCooldownUI(false);
+  showResetWaitOverlay(RESET_COOLDOWN_MS);
 }
 
 async function changePassword() {
@@ -1850,6 +2003,14 @@ function openImportDatesModal() {
   importDatesModal.classList.remove("hidden");
   if (importDatesTextarea) importDatesTextarea.focus();
   updateImportDatesPreview();
+}
+
+function openImportProductionModal() {
+  if (!state.canWrite) return;
+  if (!importProductionModal) return;
+  importProductionModal.classList.remove("hidden");
+  if (importProductionTextarea) importProductionTextarea.focus();
+  updateImportProductionPreview();
 }
 
 function openCommessaCreateModal() {
@@ -2513,6 +2674,11 @@ function closeImportDatesModal() {
   importDatesModal.classList.add("hidden");
 }
 
+function closeImportProductionModal() {
+  if (!importProductionModal) return;
+  importProductionModal.classList.add("hidden");
+}
+
 function detectDelimiter(text) {
   if (text.includes("\t")) return "\t";
   if (text.includes(";") && !text.includes(",")) return ";";
@@ -2748,6 +2914,90 @@ function updateImportDatesPreview() {
   importDatesPreview.innerHTML = `${escapeHtml(lines.join(" "))}${table}`;
 }
 
+function updateImportProductionPreview() {
+  if (!importProductionPreview) return;
+  const { rows, errors, warnings, total } = parseImportProductionRows(
+    importProductionTextarea ? importProductionTextarea.value : ""
+  );
+  if (!rows.length && !errors.length) {
+    importProductionPreview.textContent = "Nessun dato incollato.";
+    return;
+  }
+  const commessaMap = new Map((state.commesse || []).map((c) => [`${c.anno}_${c.numero}`, c]));
+  const toUpdate = [];
+  const missing = [];
+  const overwrites = [];
+  let skipped = 0;
+  rows.forEach((row) => {
+    const key = row.codeInfo ? row.codeInfo.codice : "";
+    const commessa = commessaMap.get(key);
+    if (!commessa) {
+      missing.push(key);
+      return;
+    }
+    if (row.ordine && commessa.data_ordine_telaio) {
+      const existing = formatDate(commessa.data_ordine_telaio);
+      const incoming = formatDateInput(row.ordine);
+      if (existing && incoming && existing !== incoming) overwrites.push(`${key} (ordine telaio)`);
+    }
+    if (row.prelievo && commessa.data_prelievo) {
+      const existing = formatDate(commessa.data_prelievo);
+      const incoming = formatDateInput(row.prelievo);
+      if (existing && incoming && existing !== incoming) overwrites.push(`${key} (prelievo materiali)`);
+    }
+    if (row.kit && commessa.data_arrivo_kit_cavi) {
+      const existing = formatDate(commessa.data_arrivo_kit_cavi);
+      const incoming = formatDateInput(row.kit);
+      if (existing && incoming && existing !== incoming) overwrites.push(`${key} (arrivo kit cavi)`);
+    }
+    if (row.consegna && commessa.data_consegna_macchina) {
+      const existing = formatDate(commessa.data_consegna_macchina);
+      const incoming = formatDateInput(row.consegna);
+      if (existing && incoming && existing !== incoming) overwrites.push(`${key} (consegna macchina)`);
+    }
+    if (row.ordine || row.prelievo || row.kit || row.consegna) toUpdate.push(key);
+    else skipped += 1;
+  });
+
+  const sampleList = (list, max = 20) => {
+    if (!list.length) return "";
+    if (list.length <= max) return list.join(", ");
+    const head = list.slice(0, max).join(", ");
+    return `${head} +${list.length - max}`;
+  };
+
+  const lines = [];
+  lines.push(`Righe riconosciute: ${rows.length}/${total}.`);
+  if (errors.length) lines.push(`Errori: ${errors.length} (es: ${errors[0]}).`);
+  if (warnings.length) lines.push(`Avvisi: ${warnings.length} (es: ${warnings[0]}).`);
+  if (missing.length) lines.push(`Codici non trovati: ${missing.length} (${sampleList(missing)}).`);
+  if (toUpdate.length) lines.push(`Commesse da aggiornare: ${toUpdate.length}.`);
+  if (skipped) lines.push(`Righe saltate (senza date valide): ${skipped}.`);
+  if (overwrites.length) lines.push(`Sovrascritture: ${overwrites.length} (${sampleList(overwrites)}).`);
+  const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+
+  const headerCols = ["Codice", "Ordine telaio target", "Prelievo materiali", "Arrivo kit cavi", "Consegna macchina"];
+  const previewRows = rows.slice(0, 8);
+  const tableHtml = previewRows
+    .map((row) => {
+      const cells = [
+        row.codeInfo?.codice || "",
+        row.ordineRaw || "",
+        row.prelievoRaw || "",
+        row.kitRaw || "",
+        row.consegnaRaw || "",
+      ];
+      return `<tr>${cells.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`;
+    })
+    .join("");
+  const headerHtml = headerCols.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
+  const table =
+    previewRows.length > 0
+      ? `<div class="import-preview-table-wrap"><table class="import-preview-table"><thead><tr>${headerHtml}</tr></thead><tbody>${tableHtml}</tbody></table></div>`
+      : buildRawImportTable(importProductionTextarea ? importProductionTextarea.value : "");
+  importProductionPreview.innerHTML = `${escapeHtml(lines.join(" "))}${table}`;
+}
+
 async function handleImportDates() {
   if (!state.canWrite) return;
   if (importDatesCommitBtn) {
@@ -2854,6 +3104,124 @@ async function handleImportDates() {
   if (importDatesCommitBtn) {
     importDatesCommitBtn.disabled = false;
     importDatesCommitBtn.textContent = "Import";
+  }
+}
+
+async function handleImportProduction() {
+  if (!state.canWrite) return;
+  if (importProductionCommitBtn) {
+    importProductionCommitBtn.disabled = true;
+    importProductionCommitBtn.textContent = "Importing...";
+  }
+  if (importProductionPreview) importProductionPreview.textContent = "Import in progress...";
+  const { rows, errors, warnings } = parseImportProductionRows(
+    importProductionTextarea ? importProductionTextarea.value : ""
+  );
+  if (!rows.length) {
+    setStatus("No valid rows to import.", "error");
+    showToast("No valid rows to import.", "error");
+    if (importProductionPreview) importProductionPreview.textContent = "No valid rows to import.";
+    if (importProductionCommitBtn) {
+      importProductionCommitBtn.disabled = false;
+      importProductionCommitBtn.textContent = "Import";
+    }
+    return;
+  }
+  if (errors.length) {
+    setStatus(`Import blocked: fix the errors (e.g. ${errors[0]}).`, "error");
+    showToast(`Import blocked: ${errors[0]}`, "error");
+    if (importProductionPreview) importProductionPreview.textContent = `Import blocked: ${errors[0]}`;
+    if (importProductionCommitBtn) {
+      importProductionCommitBtn.disabled = false;
+      importProductionCommitBtn.textContent = "Import";
+    }
+    return;
+  }
+
+  const commessaMap = new Map((state.commesse || []).map((c) => [`${c.anno}_${c.numero}`, c]));
+  const updates = [];
+  const skipped = [];
+  rows.forEach((row) => {
+    const key = row.codeInfo ? row.codeInfo.codice : "";
+    const commessa = commessaMap.get(key);
+    if (!commessa) {
+      skipped.push(`${key} non trovata`);
+      return;
+    }
+    const payload = {};
+    if (row.ordine) payload.data_ordine_telaio = formatDateInput(row.ordine);
+    if (row.prelievo) payload.data_prelievo = formatDateInput(row.prelievo);
+    if (row.kit) payload.data_arrivo_kit_cavi = formatDateInput(row.kit);
+    if (row.consegna) payload.data_consegna_macchina = formatDateInput(row.consegna);
+    if (!Object.keys(payload).length) {
+      skipped.push(`${key} senza date valide`);
+      return;
+    }
+    updates.push({ id: commessa.id, codice: key, payload });
+  });
+
+  if (!updates.length) {
+    setStatus("No commesse to update.", "error");
+    showToast("No commesse to update.", "error");
+    if (importProductionPreview) importProductionPreview.textContent = "No commesse to update.";
+    if (importProductionCommitBtn) {
+      importProductionCommitBtn.disabled = false;
+      importProductionCommitBtn.textContent = "Import";
+    }
+    return;
+  }
+
+  const failures = [];
+  const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+  for (let i = 0; i < updates.length; i += 1) {
+    const upd = updates[i];
+    let error = null;
+    if (role === "planner") {
+      const plannerPayload = {
+        data_ordine_telaio: upd.payload.data_ordine_telaio || null,
+        data_consegna_macchina: upd.payload.data_consegna_macchina || null,
+        data_arrivo_kit_cavi: upd.payload.data_arrivo_kit_cavi || null,
+        data_prelievo: upd.payload.data_prelievo || null,
+      };
+      error = await updateCommessaPlannerDates(upd.id, plannerPayload);
+    } else {
+      const res = await supabase.from("commesse").update(upd.payload).eq("id", upd.id);
+      error = res.error || null;
+    }
+    if (error) failures.push(`${upd.codice}: ${error.message || error}`);
+    const pct = Math.round(((i + 1) / updates.length) * 100);
+    if (importProductionCommitBtn) importProductionCommitBtn.textContent = `Importing... ${pct}%`;
+    if (importProductionPreview) {
+      importProductionPreview.textContent = `Importing ${i + 1}/${updates.length} (${pct}%)...`;
+    }
+  }
+
+  if (failures.length) {
+    setStatus(`Partial import: ${failures.length} errors.`, "error");
+    showToast(`Partial import: ${failures.length} errors.`, "error");
+    console.error("Import production errors", failures);
+  } else {
+    const skipInfo = skipped.length ? ` (saltate ${skipped.length})` : "";
+    setStatus(`Import completed: ${updates.length} commesse updated${skipInfo}.`, "ok");
+    showToast(`Import completed: ${updates.length} commesse updated${skipInfo}.`, "ok");
+  }
+  if (warnings.length) console.warn("Import production warnings", warnings);
+  if (importProductionPreview) {
+    const lines = [];
+    lines.push(`Updated: ${updates.length}.`);
+    if (skipped.length) lines.push(`Skipped: ${skipped.length}.`);
+    if (warnings.length) lines.push(`Warnings: ${warnings.length}.`);
+    if (failures.length) lines.push(`Errors: ${failures.length}.`);
+    importProductionPreview.textContent = lines.join(" ");
+  }
+  await loadCommesse();
+  if (!failures.length) {
+    closeImportProductionModal();
+    if (importProductionTextarea) importProductionTextarea.value = "";
+  }
+  if (importProductionCommitBtn) {
+    importProductionCommitBtn.disabled = false;
+    importProductionCommitBtn.textContent = "Import";
   }
 }
 
@@ -3091,6 +3459,126 @@ function parseImportDateRows(text) {
   return { rows, errors, warnings, total: lines.length };
 }
 
+function parseImportProductionRows(text) {
+  const cleaned = text.trim();
+  if (!cleaned) return { rows: [], errors: [], warnings: [], total: 0 };
+  const delimiter = detectDelimiter(cleaned);
+  const lines = cleaned.split(/\r?\n/).filter((l) => l.trim() !== "");
+  let startIndex = 0;
+  let headerMap = null;
+  if (lines.length) {
+    const first = lines[0].toLowerCase();
+    if (first.includes("codice") || first.includes("kit") || first.includes("prelievo")) {
+      startIndex = 1;
+      const headerCols = lines[0]
+        .split(delimiter)
+        .map((c) => c.trim().replace(/^"(.*)"$/, "$1").toLowerCase());
+      const map = {};
+      headerCols.forEach((col, index) => {
+        if (!col) return;
+        if (col.includes("prelievo")) {
+          map.prelievo = index;
+          return;
+        }
+        if (col.includes("kit")) {
+          map.kit = index;
+          return;
+        }
+        if (col.includes("consegna") || col.includes("delivery")) {
+          map.consegna = index;
+          return;
+        }
+        if (col.includes("ordine")) {
+          map.ordine = index;
+        }
+      });
+      if (Object.keys(map).length) headerMap = map;
+    }
+  }
+
+  const rows = [];
+  const errors = [];
+  const warnings = [];
+  for (let i = startIndex; i < lines.length; i++) {
+    const cols = lines[i]
+      .split(delimiter)
+      .map((c) => c.trim().replace(/^"(.*)"$/, "$1"));
+    if (cols.length < 1) {
+      errors.push(`Riga ${i + 1}: codice commessa mancante`);
+      continue;
+    }
+    const codeInfo = normalizeCommessaCode(cols[0]);
+    if (!codeInfo) {
+      errors.push(`Riga ${i + 1}: codice commessa non valido`);
+      continue;
+    }
+    let ordineCell = "";
+    let prelievoCell = "";
+    let kitCell = "";
+    let consegnaCell = "";
+    if (headerMap) {
+      ordineCell = headerMap.ordine != null ? cols[headerMap.ordine] || "" : "";
+      prelievoCell = headerMap.prelievo != null ? cols[headerMap.prelievo] || "" : "";
+      kitCell = headerMap.kit != null ? cols[headerMap.kit] || "" : "";
+      consegnaCell = headerMap.consegna != null ? cols[headerMap.consegna] || "" : "";
+    } else {
+      ordineCell = cols[1] || "";
+      prelievoCell = cols[2] || "";
+      kitCell = cols[3] || "";
+      consegnaCell = cols[4] || "";
+    }
+    const ordineParsed = parseDateCell(ordineCell);
+    const prelievoParsed = parseDateCell(prelievoCell);
+    const kitParsed = parseDateCell(kitCell);
+    const consegnaParsed = parseDateCell(consegnaCell);
+    if (ordineCell && ordineParsed.reason === "invalid") {
+      warnings.push(`Riga ${i + 1}: data ordine telaio non valida`);
+    } else if (ordineCell && ordineParsed.reason === "empty") {
+      warnings.push(`Riga ${i + 1}: data ordine telaio vuota/zero`);
+    } else if (ordineCell && ordineParsed.reason === "range") {
+      warnings.push(`Riga ${i + 1}: data ordine telaio fuori range (2000-2100)`);
+    }
+    if (prelievoCell && prelievoParsed.reason === "invalid") {
+      warnings.push(`Riga ${i + 1}: data prelievo materiali non valida`);
+    } else if (prelievoCell && prelievoParsed.reason === "empty") {
+      warnings.push(`Riga ${i + 1}: data prelievo materiali vuota/zero`);
+    } else if (prelievoCell && prelievoParsed.reason === "range") {
+      warnings.push(`Riga ${i + 1}: data prelievo materiali fuori range (2000-2100)`);
+    }
+    if (kitCell && kitParsed.reason === "invalid") {
+      warnings.push(`Riga ${i + 1}: data arrivo kit cavi non valida`);
+    } else if (kitCell && kitParsed.reason === "empty") {
+      warnings.push(`Riga ${i + 1}: data arrivo kit cavi vuota/zero`);
+    } else if (kitCell && kitParsed.reason === "range") {
+      warnings.push(`Riga ${i + 1}: data arrivo kit cavi fuori range (2000-2100)`);
+    }
+    if (consegnaCell && consegnaParsed.reason === "invalid") {
+      warnings.push(`Riga ${i + 1}: data consegna macchina non valida`);
+    } else if (consegnaCell && consegnaParsed.reason === "empty") {
+      warnings.push(`Riga ${i + 1}: data consegna macchina vuota/zero`);
+    } else if (consegnaCell && consegnaParsed.reason === "range") {
+      warnings.push(`Riga ${i + 1}: data consegna macchina fuori range (2000-2100)`);
+    }
+    rows.push({
+      rawIndex: i + 1,
+      codeInfo,
+      ordine: ordineParsed.date,
+      prelievo: prelievoParsed.date,
+      kit: kitParsed.date,
+      consegna: consegnaParsed.date,
+      ordineReason: ordineParsed.reason,
+      prelievoReason: prelievoParsed.reason,
+      kitReason: kitParsed.reason,
+      consegnaReason: consegnaParsed.reason,
+      ordineRaw: ordineCell,
+      prelievoRaw: prelievoCell,
+      kitRaw: kitCell,
+      consegnaRaw: consegnaCell,
+    });
+  }
+  return { rows, errors, warnings, total: lines.length };
+}
+
 function formatDateDMY(date) {
   const d = String(date.getDate()).padStart(2, "0");
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -3271,6 +3759,22 @@ function getBusinessDiffInfo(today, targetDate) {
 
 function showMilestonePicker({ commessaId, field, date, anchorRect }) {
   if (!milestonePicker || !milestoneDays || !milestoneLabel) return;
+  if (!canEditGanttMilestone(field)) {
+    if (field === "ordine" || field === "consegna") {
+      setStatus("Solo admin e planner possono modificare produzione e consegna macchina.", "error");
+      showToast("Solo admin e planner possono modificare produzione e consegna macchina.", "error");
+    } else if (field === "kit_cavi") {
+      setStatus("Solo admin, planner e responsabili possono modificare arrivo kit cavi.", "error");
+      showToast("Solo admin, planner e responsabili possono modificare arrivo kit cavi.", "error");
+    } else if (field === "ordine_pianificato") {
+      setStatus("Solo admin e responsabili possono modificare i T pianificati.", "error");
+      showToast("Solo admin e responsabili possono modificare i T pianificati.", "error");
+    } else {
+      setStatus("Non hai permessi per modificare questo elemento.", "error");
+      showToast("Non hai permessi per modificare questo elemento.", "error");
+    }
+    return;
+  }
   milestonePickerState.commessaId = commessaId;
   milestonePickerState.field = field;
   milestonePickerState.selected = date ? startOfDay(date) : null;
@@ -3332,7 +3836,11 @@ function renderMilestonePicker() {
   milestonePickerState.month = month;
   if (milestonePicker) {
     milestonePicker.classList.remove("is-telaio-on-time", "is-telaio-late", "is-telaio-target");
-    if (milestonePickerState.field === "ordine" || milestonePickerState.field === "prelievo") {
+    if (
+      milestonePickerState.field === "ordine" ||
+      milestonePickerState.field === "prelievo" ||
+      milestonePickerState.field === "kit_cavi"
+    ) {
       milestonePicker.classList.add("is-telaio-target");
     } else if (milestonePickerState.tone) {
       milestonePicker.classList.add(milestonePickerState.tone);
@@ -3341,6 +3849,8 @@ function renderMilestonePicker() {
   if (milestoneTitle) {
     if (milestonePickerState.field === "ordine") {
       milestoneTitle.textContent = "Production target date";
+    } else if (milestonePickerState.field === "kit_cavi") {
+      milestoneTitle.textContent = "Kit cables arrival date";
     } else if (milestonePickerState.field === "prelievo") {
       milestoneTitle.textContent = "Materials pickup date";
     } else if (milestonePickerState.field === "ordine_pianificato") {
@@ -3393,6 +3903,7 @@ function renderMilestonePicker() {
       if (milestonePickerState.saving) return;
       if (!state.canWrite) {
         setStatus("You don't have permission to edit this commessa.", "error");
+        showToast("You don't have permission to edit this commessa.", "error");
         return;
       }
       if (milestonePickerState.field === "ordine_pianificato" && isOrdered) {
@@ -3408,15 +3919,27 @@ function renderMilestonePicker() {
       const payload = {};
       if (field === "ordine") payload.data_ordine_telaio = formatDateInput(date);
       if (field === "prelievo") payload.data_prelievo = formatDateInput(date);
+      if (field === "kit_cavi") payload.data_arrivo_kit_cavi = formatDateInput(date);
       if (field === "consegna") payload.data_consegna_macchina = formatDateInput(date);
       if (field === "ordine_pianificato") payload.data_consegna_telaio_effettiva = formatDateInput(date);
-      const { error } = await supabase.from("commesse").update(payload).eq("id", commessaId);
+      const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+      let error = null;
+      if (
+        role === "planner" &&
+        (field === "ordine" || field === "consegna" || field === "kit_cavi" || field === "prelievo")
+      ) {
+        error = await updateCommessaPlannerDates(commessaId, payload);
+      } else {
+        const res = await supabase.from("commesse").update(payload).eq("id", commessaId);
+        error = res.error || null;
+        if (!error) updateCommessaInState(commessaId, payload);
+      }
       milestonePickerState.saving = false;
       if (error) {
         setStatus(`Update error: ${error.message}`, "error");
+        showToast(`Update error: ${error.message}`, "error");
         return;
       }
-      updateCommessaInState(commessaId, payload);
       if (field === "ordine" && state.selected?.id === commessaId && d.data_ordine_telaio) {
         d.data_ordine_telaio.value = payload.data_ordine_telaio || "";
       }
@@ -3450,6 +3973,7 @@ function renderMilestonePicker() {
       milestoneOrderBtn.onclick = async () => {
         if (!state.canWrite) {
           setStatus("You don't have permission to edit this commessa.", "error");
+          showToast("You don't have permission to edit this commessa.", "error");
           return;
         }
         const commessaId = milestonePickerState.commessaId;
@@ -3558,6 +4082,23 @@ function beginMilestoneDrag(e, { commessaId, field, date, track, line, marker, c
   if (!track) return;
   if (!state.canWrite) {
     setStatus("You don't have permission to edit this commessa.", "error");
+    showToast("You don't have permission to edit this commessa.", "error");
+    return;
+  }
+  if (!canEditGanttMilestone(field)) {
+    if (field === "ordine" || field === "consegna") {
+      setStatus("Solo admin e planner possono modificare produzione e consegna macchina.", "error");
+      showToast("Solo admin e planner possono modificare produzione e consegna macchina.", "error");
+    } else if (field === "kit_cavi") {
+      setStatus("Solo admin, planner e responsabili possono modificare arrivo kit cavi.", "error");
+      showToast("Solo admin, planner e responsabili possono modificare arrivo kit cavi.", "error");
+    } else if (field === "ordine_pianificato") {
+      setStatus("Solo admin e responsabili possono modificare i T pianificati.", "error");
+      showToast("Solo admin e responsabili possono modificare i T pianificati.", "error");
+    } else {
+      setStatus("Non hai permessi per modificare questo elemento.", "error");
+      showToast("Non hai permessi per modificare questo elemento.", "error");
+    }
     return;
   }
   closeMilestonePicker();
@@ -3631,17 +4172,35 @@ async function handleMilestoneDragEnd(e) {
   if (!newDate) return;
   const payload = {};
   if (drag.field === "ordine") payload.data_ordine_telaio = formatDateInput(newDate);
+  if (drag.field === "kit_cavi") payload.data_arrivo_kit_cavi = formatDateInput(newDate);
   if (drag.field === "prelievo") payload.data_prelievo = formatDateInput(newDate);
   if (drag.field === "consegna") payload.data_consegna_macchina = formatDateInput(newDate);
   if (drag.field === "ordine_pianificato") payload.data_consegna_telaio_effettiva = formatDateInput(newDate);
-  const { error } = await supabase.from("commesse").update(payload).eq("id", drag.commessaId);
-  if (error) {
-    setStatus(`Update error: ${error.message}`, "error");
-    return;
+  const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+  if (
+    role === "planner" &&
+    (drag.field === "ordine" || drag.field === "consegna" || drag.field === "kit_cavi" || drag.field === "prelievo")
+  ) {
+    const error = await updateCommessaPlannerDates(drag.commessaId, payload);
+    if (error) {
+      setStatus(`Update error: ${error.message}`, "error");
+      showToast(`Update error: ${error.message}`, "error");
+      return;
+    }
+  } else {
+    const { error } = await supabase.from("commesse").update(payload).eq("id", drag.commessaId);
+    if (error) {
+      setStatus(`Update error: ${error.message}`, "error");
+      showToast(`Update error: ${error.message}`, "error");
+      return;
+    }
+    updateCommessaInState(drag.commessaId, payload);
   }
-  updateCommessaInState(drag.commessaId, payload);
   if (drag.field === "ordine" && state.selected?.id === drag.commessaId && d.data_ordine_telaio) {
     d.data_ordine_telaio.value = payload.data_ordine_telaio || "";
+  }
+  if (drag.field === "kit_cavi" && state.selected?.id === drag.commessaId && d.data_arrivo_kit_cavi) {
+    d.data_arrivo_kit_cavi.value = payload.data_arrivo_kit_cavi || "";
   }
   if (drag.field === "prelievo" && state.selected?.id === drag.commessaId && d.data_prelievo_materiali) {
     d.data_prelievo_materiali.value = payload.data_prelievo || "";
@@ -4162,6 +4721,10 @@ async function handleMatrixDropOnCell(cell, e) {
   if (!risorsaId || !dayKey) return;
   const r = matrixState.risorse.find((x) => String(x.id) === String(risorsaId));
   if (!r) return;
+  if (!canMoveMatrixActivity(null, r.id)) {
+    setStatus("Non autorizzato a modificare questa riga.", "error");
+    return;
+  }
   const d = dateFromKey(dayKey);
   const createGenericActivity = async (title, options = {}) => {
     const shouldOpen = options.openModal !== false;
@@ -4268,6 +4831,10 @@ async function handleMatrixDropOnCell(cell, e) {
   if (!dragId) return;
   const item = matrixState.attivita.find((x) => x.id === dragId);
   if (!item) return;
+  if (!canMoveMatrixActivity(item, r.id)) {
+    setStatus("Non autorizzato a spostare questa attivita.", "error");
+    return;
+  }
 
   const targetDate = new Date(d);
   const start = new Date(item.data_inizio);
@@ -4337,6 +4904,10 @@ async function handleMatrixDropOnCell(cell, e) {
         const ok = await shiftRisorsa(r.id, cutDate, deltaDays, excludeIds);
         if (!ok) return;
       }
+    }
+    if (!canPermission("can_move_matrix")) {
+      setStatus("Non autorizzato a spostare attivita.", "error");
+      return;
     }
     const { error } = await supabase
       .from("attivita")
@@ -4631,6 +5202,18 @@ function renderResourceRepartoSelect(selectEl, selectedId = "") {
   });
 }
 
+function renderResourceUserSelect(selectEl, selectedId = "") {
+  if (!selectEl) return;
+  selectEl.innerHTML = `<option value="">Email utente</option>`;
+  state.utenti.forEach((u) => {
+    const opt = document.createElement("option");
+    opt.value = u.id;
+    opt.textContent = u.email || u.id;
+    if (selectedId && String(selectedId) === String(u.id)) opt.selected = true;
+    selectEl.appendChild(opt);
+  });
+}
+
 function renderResourcesPanel() {
   if (!resourcesList) return;
   resourcesList.innerHTML = "";
@@ -4655,6 +5238,10 @@ function renderResourcesPanel() {
     reparto.className = "resource-reparto";
     renderResourceRepartoSelect(reparto, r.reparto_id);
 
+    const userSelect = document.createElement("select");
+    userSelect.className = "resource-user";
+    renderResourceUserSelect(userSelect, r.utente_id);
+
     const activeLabel = document.createElement("label");
     activeLabel.className = "resource-active";
     const activeInput = document.createElement("input");
@@ -4677,9 +5264,19 @@ function renderResourcesPanel() {
         return;
       }
       const repartoId = reparto.value || null;
+      const utenteId = userSelect.value || null;
+      if (utenteId) {
+        const conflict = state.risorse.find(
+          (other) => other.id !== r.id && String(other.utente_id || "") === String(utenteId)
+        );
+        if (conflict) {
+          setStatus("Email gia assegnata a un'altra risorsa.", "error");
+          return;
+        }
+      }
       const { error } = await supabase
         .from("risorse")
-        .update({ nome, reparto_id: repartoId, attiva: activeInput.checked })
+        .update({ nome, reparto_id: repartoId, attiva: activeInput.checked, utente_id: utenteId })
         .eq("id", r.id);
       if (error) {
         setStatus(`Resource error: ${error.message}`, "error");
@@ -4708,6 +5305,7 @@ function renderResourcesPanel() {
 
     row.appendChild(name);
     row.appendChild(reparto);
+    row.appendChild(userSelect);
     row.appendChild(activeLabel);
     row.appendChild(save);
     row.appendChild(del);
@@ -4873,6 +5471,9 @@ function selectCommessa(id, options = {}) {
   if (d.data_consegna_telaio_effettiva) {
     d.data_consegna_telaio_effettiva.value = formatDate(commessa.data_consegna_telaio_effettiva);
   }
+  if (d.data_arrivo_kit_cavi) {
+    d.data_arrivo_kit_cavi.value = formatDate(commessa.data_arrivo_kit_cavi);
+  }
   if (d.data_prelievo_materiali) {
     d.data_prelievo_materiali.value = formatDate(commessa.data_prelievo);
   }
@@ -4968,6 +5569,16 @@ async function loadProfile(userFromSession = null) {
     if (role === "admin") setPasswordBtn.classList.remove("hidden");
     else setPasswordBtn.classList.add("hidden");
   }
+  if (openResourcesBtn) {
+    const role = String(data.ruolo || "").trim().toLowerCase();
+    if (role === "admin" || role === "responsabile") openResourcesBtn.classList.remove("hidden");
+    else openResourcesBtn.classList.add("hidden");
+  }
+  if (permissionsLink) {
+    const role = String(data.ruolo || "").trim().toLowerCase();
+    if (role) permissionsLink.classList.remove("hidden");
+    else permissionsLink.classList.add("hidden");
+  }
   setWriteAccess(data.ruolo !== "viewer");
   authStatus.textContent = `Connesso come ${data.email}`;
   logoutBtn.classList.remove("hidden");
@@ -5035,6 +5646,67 @@ async function loadRisorse() {
   matrixState.risorse = (data || []).filter((r) => r.attiva);
   renderMatrix();
   renderMatrixReport();
+  renderResourcesPanel();
+}
+
+async function loadPermessi() {
+  debugLog("loadPermessi query");
+  let data = null;
+  let error = null;
+  if (!PREFER_REST_ON_RELOAD) {
+    try {
+      const result = await withTimeout(
+        supabase.from("permessi_ruolo").select("*"),
+        FETCH_TIMEOUT_MS
+      );
+      data = result.data;
+      error = result.error;
+    } catch (err) {
+      debugLog(`loadPermessi timeout: ${err?.message || err}`);
+    }
+  }
+  if (!data || error) {
+    debugLog("loadPermessi fallback REST");
+    data = await fetchTableViaRest("permessi_ruolo", "select=*");
+  }
+  if (!data) {
+    setStatus(`Permissions error: ${error?.message || "no data"}`, "error");
+    state.permessiByRuolo = new Map();
+    state.permessi = {};
+    return;
+  }
+  state.permessiByRuolo = new Map(
+    data.map((row) => [String(row.ruolo || "").toLowerCase(), row])
+  );
+  const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+  state.permessi = state.permessiByRuolo.get(role) || {};
+}
+
+async function loadUtenti() {
+  debugLog("loadUtenti query");
+  let data = null;
+  let error = null;
+  if (!PREFER_REST_ON_RELOAD) {
+    try {
+      const result = await withTimeout(
+        supabase.from("utenti").select("id,email").order("email"),
+        FETCH_TIMEOUT_MS
+      );
+      data = result.data;
+      error = result.error;
+    } catch (err) {
+      debugLog(`loadUtenti timeout: ${err?.message || err}`);
+    }
+  }
+  if (!data || error) {
+    debugLog("loadUtenti fallback REST");
+    data = await fetchTableViaRest("utenti", "select=id,email&order=email.asc");
+  }
+  if (!data) {
+    setStatus(`Users error: ${error?.message || "no data"}`, "error");
+    return;
+  }
+  state.utenti = data || [];
   renderResourcesPanel();
 }
 
@@ -5530,6 +6202,11 @@ function renderMatrix() {
       bar.draggable = true;
       bar.addEventListener("dragstart", (e) => {
         if (!state.canWrite) return;
+        if (!canMoveMatrixActivity(b.a, b.a.risorsa_id)) {
+          setStatus("Non autorizzato a spostare attivita.", "error");
+          e.preventDefault();
+          return;
+        }
         if (matrixState.resizing) {
           e.preventDefault();
           return;
@@ -5549,6 +6226,10 @@ function renderMatrix() {
       });
       bar.addEventListener("mousedown", (e) => {
         if (!state.canWrite) return;
+        if (!canMoveMatrixActivity(b.a, b.a.risorsa_id)) {
+          setStatus("Non autorizzato a spostare attivita.", "error");
+          return;
+        }
         if (matrixState.resizing) return;
         if (e.button !== 0) return;
         cancelCommessaHighlightTimer();
@@ -5732,16 +6413,20 @@ function renderMatrixReport() {
     const targetRaw = c.data_consegna_macchina || c.data_consegna_prevista || c.data_consegna || "";
     const targetDate = targetRaw ? new Date(targetRaw) : null;
     const ordineRaw = c.data_ordine_telaio || "";
+    const kitRaw = c.data_arrivo_kit_cavi || "";
     const ordineDate = ordineRaw ? new Date(ordineRaw) : null;
+    const kitDate = kitRaw ? new Date(kitRaw) : null;
     const prelievoRaw = c.data_prelievo || "";
     const prelievoDate = prelievoRaw ? new Date(prelievoRaw) : null;
     const isDateOk = (d) => d && !Number.isNaN(d.getTime()) && d.getFullYear() >= 2000 && d.getFullYear() <= 2100;
     const safeTarget = isDateOk(targetDate) ? targetDate : null;
     const safeOrdine = isDateOk(ordineDate) ? ordineDate : null;
+    const safeKit = isDateOk(kitDate) ? kitDate : null;
     const safePrelievo = isDateOk(prelievoDate) ? prelievoDate : null;
     const targetInfo = getBusinessDiffInfo(today, safeTarget);
     const ordineInfo = getBusinessDiffInfo(today, safeOrdine);
     const missingPrelievo = !safePrelievo;
+    const missingKit = !safeKit;
     const missingOrdine = !safeOrdine || missingPrelievo;
     const missingTarget = !safeTarget;
 
@@ -5759,6 +6444,7 @@ function renderMatrixReport() {
           missingOrdine || missingTarget
             ? `<div class="report-missing">
                 ${!safeOrdine ? `<span class="missing-pill">Manca data ordine telaio</span>` : ""}
+                ${missingKit ? `<span class="missing-pill">Manca data arrivo kit cavi</span>` : ""}
                 ${missingPrelievo ? `<span class="missing-pill">Manca data prelievo materiali</span>` : ""}
                 ${missingTarget ? `<span class="missing-pill">Manca data consegna macchina</span>` : ""}
               </div>`
@@ -6038,6 +6724,11 @@ function renderReportGantt(commesse, today) {
     const d = raw ? new Date(raw) : null;
     return isDateOk(d) ? d : null;
   };
+  const getKitCaviDate = (c) => {
+    const raw = c.data_arrivo_kit_cavi || "";
+    const d = raw ? new Date(raw) : null;
+    return isDateOk(d) ? d : null;
+  };
   const getTelaioEffDate = (c) => {
     const raw = c.data_consegna_telaio_effettiva || "";
     const d = raw ? new Date(raw) : null;
@@ -6051,6 +6742,7 @@ function renderReportGantt(commesse, today) {
     const target = getTargetDate(c);
     const ordine = getOrdineDate(c);
     const prelievo = getPrelievoDate(c);
+    const kitCavi = getKitCaviDate(c);
     const ordineDay = ordine ? startOfDay(ordine) : null;
     if (start && start < minDate) minDate = start;
     if (target && target > maxDate) maxDate = target;
@@ -6058,6 +6750,8 @@ function renderReportGantt(commesse, today) {
     if (ordine && ordine > maxDate) maxDate = ordine;
     if (prelievo && prelievo < minDate) minDate = prelievo;
     if (prelievo && prelievo > maxDate) maxDate = prelievo;
+    if (kitCavi && kitCavi < minDate) minDate = kitCavi;
+    if (kitCavi && kitCavi > maxDate) maxDate = kitCavi;
   });
   if (!maxDate || maxDate < minDate) {
     maxDate = addDays(minDate, 30);
@@ -6124,6 +6818,13 @@ function renderReportGantt(commesse, today) {
   const showYearHeaders = !getReportFilters().orderDue;
   let lastYear = null;
   commesse.forEach((c) => {
+    const milestoneStacks = new Map();
+    const stackMilestone = (marker, dayKey, base = 2) => {
+      if (!marker || !dayKey) return;
+      const count = milestoneStacks.get(dayKey) || 0;
+      marker.style.bottom = `${base + count * 12}px`;
+      milestoneStacks.set(dayKey, count + 1);
+    };
     const yearKey = String(c.anno || getCommessaYear(c) || "Senza anno");
     if (showYearHeaders && yearKey !== lastYear) {
       const yearHeader = document.createElement("div");
@@ -6136,13 +6837,16 @@ function renderReportGantt(commesse, today) {
     const target = getTargetDate(c);
     const ordine = getOrdineDate(c);
     const prelievo = getPrelievoDate(c);
+    const kitCavi = getKitCaviDate(c);
     const ordinePianificato = getTelaioEffDate(c);
     const missingPrelievo = !prelievo;
+    const missingKitCavi = !kitCavi;
     const missingOrdineTarget = !ordine;
     const missingPlanning = missingOrdineTarget || missingPrelievo;
     const missingTarget = !target;
     const ordineDay = ordine ? normalizeBusinessDay(startOfDay(ordine), 1) : null;
     const prelievoDay = prelievo ? normalizeBusinessDay(startOfDay(prelievo), 1) : null;
+    const kitCaviDay = kitCavi ? normalizeBusinessDay(startOfDay(kitCavi), 1) : null;
     const ordinePianificatoDay = ordinePianificato ? normalizeBusinessDay(startOfDay(ordinePianificato), 1) : null;
     const telaioConsegnato = Boolean(c.telaio_consegnato);
     const plannedMatchesTarget = Boolean(
@@ -6273,28 +6977,35 @@ function renderReportGantt(commesse, today) {
           : `Ordine telaio (target): ${formatDateDMY(ordineDay)}${markTargetDelivered ? " • consegnato" : ""}`;
         milestone.dataset.commessaId = String(c.id);
         milestone.dataset.field = "ordine";
-        milestone.addEventListener("mousedown", (e) => {
-          e.stopPropagation();
-          beginMilestoneDrag(e, {
-            commessaId: c.id,
-            field: "ordine",
-            date: ordineDay,
-            track,
-            line: null,
-            marker: milestone,
+        if (canEditGanttMilestone("ordine")) {
+          milestone.addEventListener("mousedown", (e) => {
+            e.stopPropagation();
+            beginMilestoneDrag(e, {
+              commessaId: c.id,
+              field: "ordine",
+              date: ordineDay,
+              track,
+              line: null,
+              marker: milestone,
+            });
           });
-        });
-        milestone.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (Date.now() < milestoneSuppressClickUntil) return;
-          showMilestonePicker({
-            commessaId: c.id,
-            field: "ordine",
-            date: ordineDay,
-            anchorRect: milestone.getBoundingClientRect(),
+          milestone.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (Date.now() < milestoneSuppressClickUntil) return;
+            showMilestonePicker({
+              commessaId: c.id,
+              field: "ordine",
+              date: ordineDay,
+              anchorRect: milestone.getBoundingClientRect(),
+            });
           });
-        });
+        } else {
+          milestone.classList.add("is-locked");
+          milestone.setAttribute("aria-disabled", "true");
+          milestone.title += " • bloccato";
+        }
         trackContent.appendChild(milestone);
+        stackMilestone(milestone, formatDateLocal(ordineDay), 2);
       }
     }
     if (showPlannedOrdine) {
@@ -6330,7 +7041,7 @@ function renderReportGantt(commesse, today) {
               anchorRect: effMarker.getBoundingClientRect(),
             });
           });
-        } else {
+        } else if (canEditGanttMilestone("ordine_pianificato")) {
           effMarker.addEventListener("mousedown", (e) => {
             e.stopPropagation();
             beginMilestoneDrag(e, {
@@ -6353,8 +7064,55 @@ function renderReportGantt(commesse, today) {
               anchorRect: effMarker.getBoundingClientRect(),
             });
           });
+        } else {
+          effMarker.classList.add("is-locked");
+          effMarker.setAttribute("aria-disabled", "true");
         }
         trackContent.appendChild(effMarker);
+        stackMilestone(effMarker, formatDateLocal(ordinePianificatoDay), 2);
+      }
+    }
+    if (kitCaviDay) {
+      if (kitCaviDay >= rangeStart && kitCaviDay <= rangeEnd) {
+        const kitIndex = businessDayDiff(rangeStart, kitCaviDay);
+        const kitLeft = ((kitIndex + 0.5) / totalDays) * 100;
+        const kitMarker = document.createElement("button");
+        kitMarker.type = "button";
+        kitMarker.className = "report-gantt-milestone is-kit-cavi";
+        kitMarker.style.left = `${kitLeft}%`;
+        kitMarker.textContent = "🔌";
+        kitMarker.title = `Arrivo kit cavi: ${formatDateDMY(kitCaviDay)}`;
+        kitMarker.dataset.commessaId = String(c.id);
+        kitMarker.dataset.field = "kit_cavi";
+        if (canEditGanttMilestone("kit_cavi")) {
+          kitMarker.addEventListener("mousedown", (e) => {
+            e.stopPropagation();
+            beginMilestoneDrag(e, {
+              commessaId: c.id,
+              field: "kit_cavi",
+              date: kitCaviDay,
+              track,
+              line: null,
+              marker: kitMarker,
+            });
+          });
+          kitMarker.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (Date.now() < milestoneSuppressClickUntil) return;
+            showMilestonePicker({
+              commessaId: c.id,
+              field: "kit_cavi",
+              date: kitCaviDay,
+              anchorRect: kitMarker.getBoundingClientRect(),
+            });
+          });
+        } else {
+          kitMarker.classList.add("is-locked");
+          kitMarker.setAttribute("aria-disabled", "true");
+          kitMarker.title += " • bloccato";
+        }
+        trackContent.appendChild(kitMarker);
+        stackMilestone(kitMarker, formatDateLocal(kitCaviDay), 2);
       }
     }
     if (prelievoDay) {
@@ -6369,28 +7127,35 @@ function renderReportGantt(commesse, today) {
         prelievoMarker.title = `Prelievo materiali: ${formatDateDMY(prelievoDay)}`;
         prelievoMarker.dataset.commessaId = String(c.id);
         prelievoMarker.dataset.field = "prelievo";
-        prelievoMarker.addEventListener("mousedown", (e) => {
-          e.stopPropagation();
-          beginMilestoneDrag(e, {
-            commessaId: c.id,
-            field: "prelievo",
-            date: prelievoDay,
-            track,
-            line: null,
-            marker: prelievoMarker,
+        if (canEditGanttMilestone("prelievo")) {
+          prelievoMarker.addEventListener("mousedown", (e) => {
+            e.stopPropagation();
+            beginMilestoneDrag(e, {
+              commessaId: c.id,
+              field: "prelievo",
+              date: prelievoDay,
+              track,
+              line: null,
+              marker: prelievoMarker,
+            });
           });
-        });
-        prelievoMarker.addEventListener("click", (e) => {
-          e.stopPropagation();
-          if (Date.now() < milestoneSuppressClickUntil) return;
-          showMilestonePicker({
-            commessaId: c.id,
-            field: "prelievo",
-            date: prelievoDay,
-            anchorRect: prelievoMarker.getBoundingClientRect(),
+          prelievoMarker.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (Date.now() < milestoneSuppressClickUntil) return;
+            showMilestonePicker({
+              commessaId: c.id,
+              field: "prelievo",
+              date: prelievoDay,
+              anchorRect: prelievoMarker.getBoundingClientRect(),
+            });
           });
-        });
+        } else {
+          prelievoMarker.classList.add("is-locked");
+          prelievoMarker.setAttribute("aria-disabled", "true");
+          prelievoMarker.title += " • bloccato";
+        }
         trackContent.appendChild(prelievoMarker);
+        stackMilestone(prelievoMarker, formatDateLocal(prelievoDay), 2);
       }
     }
     if (targetDay) {
@@ -6408,28 +7173,35 @@ function renderReportGantt(commesse, today) {
       consegna.dataset.commessaId = String(c.id);
       consegna.dataset.field = "consegna";
       consegna.dataset.transport = transport;
-      consegna.addEventListener("mousedown", (e) => {
-        e.stopPropagation();
-        beginMilestoneDrag(e, {
-          commessaId: c.id,
-          field: "consegna",
-          date: targetDay,
-          track,
-          line: null,
-          marker: consegna,
+      if (canEditGanttMilestone("consegna")) {
+        consegna.addEventListener("mousedown", (e) => {
+          e.stopPropagation();
+          beginMilestoneDrag(e, {
+            commessaId: c.id,
+            field: "consegna",
+            date: targetDay,
+            track,
+            line: null,
+            marker: consegna,
+          });
         });
-      });
-      consegna.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (Date.now() < milestoneSuppressClickUntil) return;
-        showMilestonePicker({
-          commessaId: c.id,
-          field: "consegna",
-          date: targetDay,
-          anchorRect: consegna.getBoundingClientRect(),
+        consegna.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (Date.now() < milestoneSuppressClickUntil) return;
+          showMilestonePicker({
+            commessaId: c.id,
+            field: "consegna",
+            date: targetDay,
+            anchorRect: consegna.getBoundingClientRect(),
+          });
         });
-      });
+      } else {
+        consegna.classList.add("is-locked");
+        consegna.setAttribute("aria-disabled", "true");
+        consegna.title += " • bloccato";
+      }
       trackContent.appendChild(consegna);
+      stackMilestone(consegna, formatDateLocal(targetDay), 2);
     }
 
     const schedule = state.reportActivitiesMap.get(String(c.id));
@@ -6894,6 +7666,7 @@ async function setupRealtime() {
 async function saveCommessa(closeOnSuccess = true) {
   if (!state.canWrite) {
     setStatus("You don't have permission to edit this commessa.", "error");
+    showToast("You don't have permission to edit this commessa.", "error");
     return;
   }
   if (updateBtn) {
@@ -6943,6 +7716,7 @@ async function saveCommessa(closeOnSuccess = true) {
       priorita: d.priorita.value || null,
       data_ingresso: d.data_ingresso.value || null,
       data_ordine_telaio: d.data_ordine_telaio ? d.data_ordine_telaio.value || null : null,
+      data_arrivo_kit_cavi: d.data_arrivo_kit_cavi ? d.data_arrivo_kit_cavi.value || null : null,
       data_prelievo: d.data_prelievo_materiali ? d.data_prelievo_materiali.value || null : null,
       telaio_consegnato: telaioConsegnato,
       data_consegna_telaio_effettiva: telaioEffettivo,
@@ -6950,12 +7724,29 @@ async function saveCommessa(closeOnSuccess = true) {
       data_consegna_macchina: consegnaValue,
       note_generali: d.note.value.trim() || null,
     };
-    const { error } = await supabase.from("commesse").update(payload).eq("id", state.selected.id);
-    if (error) {
-      setStatus(`Update error: ${error.message}`, "error");
-      return;
+    const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+    if (role === "planner") {
+      const plannerPayload = {
+        data_ordine_telaio: payload.data_ordine_telaio || null,
+        data_consegna_macchina: payload.data_consegna_macchina || null,
+        data_arrivo_kit_cavi: payload.data_arrivo_kit_cavi || null,
+        data_prelievo: payload.data_prelievo || null,
+      };
+      const error = await updateCommessaPlannerDates(state.selected.id, plannerPayload);
+      if (error) {
+        setStatus(`Update error: ${error.message}`, "error");
+        showToast(`Update error: ${error.message}`, "error");
+        return;
+      }
+      updateCommessaInState(state.selected.id, plannerPayload);
+    } else {
+      const { error } = await supabase.from("commesse").update(payload).eq("id", state.selected.id);
+      if (error) {
+        setStatus(`Update error: ${error.message}`, "error");
+        return;
+      }
+      updateCommessaInState(state.selected.id, payload);
     }
-    updateCommessaInState(state.selected.id, payload);
     applyFilters();
     renderMatrixReport();
     setDetailSnapshot();
@@ -7113,6 +7904,10 @@ async function handleAssignConfirm() {
       assignConfirmBtn.textContent = "Assegno...";
     }
   const { commessaId, risorsaId, day } = matrixState.pendingDrop;
+  if (!canMoveMatrixActivity(null, risorsaId)) {
+    setStatus("Non autorizzato a modificare questa riga.", "error");
+    return;
+  }
   const startAt = new Date(day);
   startAt.setHours(8, 0, 0, 0);
   const endAt = new Date(day);
@@ -7188,6 +7983,104 @@ if (resetPasswordBtn) {
 }
 if (setPasswordBtn) {
   setPasswordBtn.addEventListener("click", changePassword);
+}
+if (resetWaitCloseBtn) {
+  resetWaitCloseBtn.addEventListener("click", hideResetWaitOverlay);
+}
+if (topbarMenu && topbarMenuToggle) {
+  topbarMenuToggle.addEventListener("click", () => {
+    const isOpen = topbarMenu.classList.toggle("is-open");
+    topbarMenuToggle.setAttribute("aria-expanded", String(isOpen));
+  });
+}
+
+function isAdmin() {
+  const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+  return role === "admin";
+}
+
+async function loadUsers() {
+  if (!usersList) return;
+  let data = null;
+  let error = null;
+  try {
+    const result = await supabase.from("utenti").select("id,email,nome,ruolo").order("email");
+    data = result.data;
+    error = result.error;
+  } catch (err) {
+    error = err;
+  }
+  if (!data || error) {
+    data = await fetchTableViaRest("utenti", "select=id,email,nome,ruolo&order=email.asc");
+  }
+  if (!data) {
+    usersList.innerHTML = `<div class="matrix-empty">Errore caricamento utenti.</div>`;
+    return;
+  }
+  state.utenti = data || [];
+  renderResourcesPanel();
+  renderUsersPanel(data);
+}
+
+function renderUsersPanel(users) {
+  if (!usersList) return;
+  usersList.innerHTML = "";
+  if (!users.length) {
+    usersList.innerHTML = `<div class="matrix-empty">Nessun utente.</div>`;
+    return;
+  }
+  const canEdit = isAdmin();
+  const currentUserId = state.profile?.id;
+
+  users.forEach((u) => {
+    const row = document.createElement("div");
+    row.className = "user-row";
+
+    const meta = document.createElement("div");
+    meta.className = "user-meta";
+    const email = document.createElement("div");
+    email.className = "user-email";
+    email.textContent = u.email || u.id;
+    const name = document.createElement("div");
+    name.className = "user-name";
+    name.textContent = u.nome || "";
+    meta.appendChild(email);
+    meta.appendChild(name);
+
+    const role = document.createElement("select");
+    ["admin", "responsabile", "planner", "operatore", "viewer"].forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = r;
+      opt.textContent = r;
+      if (String(u.ruolo || "").toLowerCase() === r) opt.selected = true;
+      role.appendChild(opt);
+    });
+
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "ghost";
+    save.textContent = "Salva";
+    save.addEventListener("click", async () => {
+      if (!isAdmin()) return;
+      const { error } = await supabase.from("utenti").update({ ruolo: role.value }).eq("id", u.id);
+      if (error) {
+        setStatus(`Ruolo non aggiornato: ${error.message}`, "error");
+        return;
+      }
+      setStatus("Ruolo aggiornato.", "ok");
+      await loadUsers();
+    });
+
+    if (!canEdit || (currentUserId && String(currentUserId) === String(u.id))) {
+      role.disabled = true;
+      save.disabled = true;
+    }
+
+    row.appendChild(meta);
+    row.appendChild(role);
+    row.appendChild(save);
+    usersList.appendChild(row);
+  });
 }
 
 updateResetCooldownUI();
@@ -7463,20 +8356,33 @@ openImportBtn.addEventListener("click", openImportModal);
 if (openImportDatesBtn) {
   openImportDatesBtn.addEventListener("click", openImportDatesModal);
 }
+if (openImportProductionBtn) {
+  openImportProductionBtn.addEventListener("click", openImportProductionModal);
+}
 closeImportBtn.addEventListener("click", closeImportModal);
 if (closeImportDatesBtn) {
   closeImportDatesBtn.addEventListener("click", closeImportDatesModal);
 }
+if (closeImportProductionBtn) {
+  closeImportProductionBtn.addEventListener("click", closeImportProductionModal);
+}
 importTextarea.addEventListener("input", updateImportPreview);
 if (importDatesTextarea) importDatesTextarea.addEventListener("input", updateImportDatesPreview);
+if (importProductionTextarea) importProductionTextarea.addEventListener("input", updateImportProductionPreview);
 importCommitBtn.addEventListener("click", handleImport);
 if (importDatesCommitBtn) importDatesCommitBtn.addEventListener("click", handleImportDates);
+if (importProductionCommitBtn) importProductionCommitBtn.addEventListener("click", handleImportProduction);
 importModal.addEventListener("click", (e) => {
   if (e.target === importModal) closeImportModal();
 });
 if (importDatesModal) {
   importDatesModal.addEventListener("click", (e) => {
     if (e.target === importDatesModal) closeImportDatesModal();
+  });
+}
+if (importProductionModal) {
+  importProductionModal.addEventListener("click", (e) => {
+    if (e.target === importProductionModal) closeImportProductionModal();
   });
 }
 window.addEventListener("keydown", (e) => {
@@ -7632,6 +8538,9 @@ if (matrixReportSortBtn) {
 if (matrixTrash) {
   matrixTrash.addEventListener("dragover", (e) => {
     if (!state.canWrite) return;
+    const dragId = matrixState.draggingId || e.dataTransfer.getData("text/plain");
+    const attivita = matrixState.attivita.find((x) => String(x.id) === String(dragId));
+    if (!canDeleteMatrixActivity(attivita)) return;
     e.preventDefault();
     matrixTrash.classList.add("is-dragover");
   });
@@ -7639,11 +8548,19 @@ if (matrixTrash) {
     matrixTrash.classList.remove("is-dragover");
   });
   matrixTrash.addEventListener("drop", async (e) => {
-    if (!state.canWrite) return;
+    if (!state.canWrite) {
+      setStatus("Non autorizzato a eliminare attivita.", "error");
+      return;
+    }
+    const dragId = matrixState.draggingId || e.dataTransfer.getData("text/plain");
+    const attivita = matrixState.attivita.find((x) => String(x.id) === String(dragId));
+    if (!canDeleteMatrixActivity(attivita)) {
+      setStatus("Non autorizzato a eliminare attivita.", "error");
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     matrixTrash.classList.remove("is-dragover");
-    const dragId = matrixState.draggingId || e.dataTransfer.getData("text/plain");
     if (!dragId) return;
     await deleteActivityById(dragId);
   });
@@ -7800,6 +8717,7 @@ if (milestoneClearBtn) {
     if (milestonePickerState.saving) return;
     if (!state.canWrite) {
       setStatus("You don't have permission to edit this commessa.", "error");
+      showToast("You don't have permission to edit this commessa.", "error");
       return;
     }
     const commessaId = milestonePickerState.commessaId;
@@ -7808,13 +8726,23 @@ if (milestoneClearBtn) {
     milestonePickerState.saving = true;
     const payload = {};
     if (field === "ordine") payload.data_ordine_telaio = null;
+    if (field === "kit_cavi") payload.data_arrivo_kit_cavi = null;
     if (field === "prelievo") payload.data_prelievo = null;
     if (field === "consegna") payload.data_consegna_macchina = null;
     if (field === "ordine_pianificato") payload.data_consegna_telaio_effettiva = null;
-    const { error } = await supabase.from("commesse").update(payload).eq("id", commessaId);
+    const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+    let error = null;
+      if (role === "planner" && (field === "ordine" || field === "consegna" || field === "kit_cavi")) {
+        error = await updateCommessaPlannerDates(commessaId, payload);
+      } else {
+      const res = await supabase.from("commesse").update(payload).eq("id", commessaId);
+      error = res.error || null;
+      if (!error) updateCommessaInState(commessaId, payload);
+    }
     milestonePickerState.saving = false;
     if (error) {
       setStatus(`Update error: ${error.message}`, "error");
+      showToast(`Update error: ${error.message}`, "error");
       return;
     }
     setStatus("Date removed.", "ok");

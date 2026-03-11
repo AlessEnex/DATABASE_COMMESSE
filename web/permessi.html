@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Permessi | Commesse Live</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">CL</div>
+          <div>
+            <div class="title">Permessi</div>
+            <div class="subtitle">Gestione operazioni per ruolo</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <a class="ghost nav-link" href="index.html">Torna alla app</a>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Operazioni</h2>
+          </div>
+          <div id="permessiStatus" class="status-msg"></div>
+          <div id="permessiSummary" class="permessi-summary"></div>
+          <div class="permessi-rules-grid">
+            <div id="permessiSqlRules" class="permessi-rules"></div>
+            <div id="permessiFrontendRules" class="permessi-rules"></div>
+          </div>
+          <div id="permessiList" class="permessi-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="permessiGate" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="permessiGateTitle">Accesso richiesto</h3>
+        </div>
+        <div id="permessiGateText" class="modal-hint">Effettua il login nella app.</div>
+        <div class="modal-actions">
+          <a class="ghost" href="index.html">Torna alla app</a>
+        </div>
+      </div>
+    </div>
+
+    <script src="permessi.js"></script>
+  </body>
+</html>

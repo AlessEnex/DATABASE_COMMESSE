@@ -38,11 +38,21 @@
                 title="Imposta password"
                 aria-label="Imposta password"
               >
-                🔑
+                Change Password
               </button>
-              <a class="ghost nav-link" href="motore.html">Regole</a>
-              <button id="openResourcesBtn" class="ghost" type="button">Gestisci risorse</button>
-              <button id="openBackupBtn" class="ghost" type="button">Backup</button>
+              <div class="topbar-menu-wrap">
+                <button id="topbarMenuToggle" class="ghost topbar-menu-toggle" type="button" aria-expanded="false">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </button>
+                <div id="topbarMenu" class="topbar-menu">
+                  <a class="ghost nav-link" href="motore.html">Regole</a>
+                  <a id="permissionsLink" class="ghost hidden" href="permessi.html">Permessi</a>
+                  <button id="openResourcesBtn" class="ghost hidden" type="button">Gestisci risorse</button>
+                  <button id="openBackupBtn" class="ghost" type="button">Backup</button>
+                </div>
+              </div>
               <button id="themeToggleBtn" class="ghost" type="button" aria-label="Toggle theme" title="Toggle theme">🌕</button>
               <button id="logoutBtn" class="ghost hidden link-btn">Log out</button>
             </div>
@@ -95,6 +105,7 @@
               </select>
               <button id="openImportBtn" class="ghost" type="button">Importa Excel</button>
               <button id="openImportDatesBtn" class="ghost" type="button">Importa date</button>
+              <button id="openImportProductionBtn" class="ghost" type="button">Importa date produzione</button>
             </div>
             <div id="commesseList" class="list"></div>
           </div>
@@ -424,6 +435,10 @@
                 <input id="d_data_consegna_telaio_effettiva" type="date" />
               </label>
               <label>
+                Arrivo kit cavi
+                <input id="d_data_arrivo_kit_cavi" type="date" />
+              </label>
+              <label>
                 Prelievo materiali
                 <input id="d_data_prelievo_materiali" type="date" />
               </label>
@@ -664,6 +679,13 @@
           <button id="closeResourcesBtn" class="ghost" type="button">Chiudi</button>
         </div>
         <div id="resourcesList" class="resources-list"></div>
+        <div class="resources-users">
+          <div class="resources-users-header">
+            <h4>Ruoli utenti</h4>
+            <span class="resources-users-hint">Solo admin puo modificare</span>
+          </div>
+          <div id="usersList" class="users-list"></div>
+        </div>
         <form id="resourceForm" class="inline-form resources-form">
           <input id="resourceName" type="text" placeholder="Nome risorsa" required />
           <select id="resourceReparto"></select>
@@ -735,6 +757,38 @@
     <div id="reportDeptMenu" class="report-dept-menu hidden"></div>
 
     <div id="toastStack" class="toast-stack"></div>
+    <div id="resetWaitOverlay" class="reset-wait hidden" aria-live="polite">
+      <div class="reset-wait-card" role="dialog" aria-modal="true" aria-labelledby="resetWaitTitle">
+        <h3 id="resetWaitTitle">Controlla la tua email</h3>
+        <p>Il link di reset puo arrivare fino a 5 minuti. Non chiudere questa pagina.</p>
+        <div class="reset-wait-countdown">
+          Tempo stimato: <span id="resetWaitCountdown">5:00</span>
+        </div>
+        <button id="resetWaitCloseBtn" class="ghost" type="button">Ok</button>
+      </div>
+    </div>
+
+    <div id="importProductionModal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Importa date produzione</h3>
+          <button id="closeImportProductionBtn" class="ghost" type="button">Chiudi</button>
+        </div>
+        <p class="modal-hint">
+          Incolla righe tab-separate da Excel. Formato richiesto:
+          <span class="mono">codice_commessa + ordine_telaio_target + prelievo_materiali + data_arrivo_kit_cavi + consegna_macchina</span>.
+        </p>
+        <textarea
+          id="importProductionTextarea"
+          rows="10"
+          placeholder="2026_99	15/03/2026	20/03/2026	22/03/2026	30/05/2026"
+        ></textarea>
+        <div id="importProductionPreview" class="modal-preview">Nessun dato incollato.</div>
+        <div class="modal-actions">
+          <button id="importProductionCommitBtn" class="primary" type="button">Importa</button>
+        </div>
+      </div>
+    </div>
 
     <script src="app.js"></script>
   </body>
