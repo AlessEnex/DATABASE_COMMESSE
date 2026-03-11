@@ -246,7 +246,7 @@
           </div>
         </section>
 
-        <section id="calendarPanel" class="panel calendar-panel">
+        <section id="calendarPanel" class="panel calendar-panel collapsed">
           <div class="panel-header">
             <h2 id="calendarTitle">Calendario attivita</h2>
             <div class="calendar-controls">
@@ -291,7 +291,32 @@
           </div>
           <div class="panel-body">
             <div class="todo-header">
-              <span class="todo-sub">Long press su una cella per “Non necessaria”.</span>
+              <div class="todo-filters">
+                <input id="todoDescFilter" type="text" placeholder="Descrizione" />
+                <input id="todoNumberFilter" type="number" min="1" step="1" placeholder="Numero" />
+                <select id="todoYearFilter">
+                  <option value="">Tutti gli anni</option>
+                </select>
+                <select id="todoPriorityField">
+                  <option value="">Priorità date: nessuna</option>
+                  <option value="telaio_target">Telaio target</option>
+                  <option value="telaio_stimato">Telaio stimato</option>
+                  <option value="prelievo">Prelievo</option>
+                  <option value="kit_cavi">Kit cavi</option>
+                  <option value="consegna">Consegna</option>
+                </select>
+                <button id="todoPriorityBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
+                  Priorità: OFF
+                </button>
+                <button id="todoSortBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
+                  Ordine numero: OFF
+                </button>
+                <button id="todoCompleteBtn" class="ghost todo-toggle-btn active" type="button">
+                  Complete: nascoste
+                </button>
+              </div>
+              <span class="todo-sub">Click o long press su una pill per cambiare stato.</span>
+              <div id="todoHeaderTableHost" class="todo-header-table-host"></div>
             </div>
             <div id="todoGrid" class="todo-grid"></div>
           </div>
@@ -774,10 +799,9 @@
     </div>
 
     <div id="reportDeptMenu" class="report-dept-menu hidden"></div>
-    <div id="todoStatusMenu" class="todo-status-menu hidden">
-      <button type="button" data-action="set">Non necessaria</button>
-      <button type="button" data-action="clear">Ripristina</button>
-    </div>
+    <div id="todoFocusOverlay" class="todo-focus-overlay hidden"></div>
+    <div id="todoStatusMenu" class="todo-status-menu hidden"></div>
+    <div id="todoGlobalStatusMenu" class="todo-status-menu hidden"></div>
 
     <div id="toastStack" class="toast-stack"></div>
     <div id="resetWaitOverlay" class="reset-wait hidden" aria-live="polite">

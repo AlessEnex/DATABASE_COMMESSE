@@ -1,4 +1,4 @@
-(() => {
+﻿(() => {
   if (window.__commesseAppLoaded) return;
   window.__commesseAppLoaded = true;
 
@@ -378,7 +378,17 @@ const milestoneDragLabel = el("milestoneDragLabel");
 const reportDeptMenu = el("reportDeptMenu");
 const todoSection = el("todoSection");
 const todoGrid = el("todoGrid");
+const todoHeaderTableHost = el("todoHeaderTableHost");
 const todoStatusMenu = el("todoStatusMenu");
+const todoGlobalStatusMenu = el("todoGlobalStatusMenu");
+const todoFocusOverlay = el("todoFocusOverlay");
+const todoDescFilter = el("todoDescFilter");
+const todoNumberFilter = el("todoNumberFilter");
+const todoYearFilter = el("todoYearFilter");
+const todoPriorityField = el("todoPriorityField");
+const todoPriorityBtn = el("todoPriorityBtn");
+const todoSortBtn = el("todoSortBtn");
+const todoCompleteBtn = el("todoCompleteBtn");
 const sectionToolbar = el("sectionToolbar");
 const sectionLinks = Array.from(document.querySelectorAll(".section-link"));
 const MILESTONE_MIN_YEAR = 2024;
@@ -573,7 +583,14 @@ let confirmAction = null;
 let todoMenuTarget = null;
 let todoLongPressTimer = null;
 let todoLongPressStart = null;
+let todoLongPressSuppress = false;
+let todoFocusedRowKey = null;
+let todoMenuAnchorEl = null;
+let todoGlobalMenuTarget = null;
+let todoGlobalMenuAnchorEl = null;
+let todoGlobalMenuSuppress = false;
 let todoLastRendered = [];
+let todoScrollSyncLock = false;
 let deleteCommessaId = null;
 let detailSnapshot = "";
 let detailDirty = false;
@@ -710,7 +727,7 @@ function openMatrixQuickMenu(attivita, x, y) {
   if (matrixQuickInfo) {
     const commessa = attivita?.commessa_id ? state.commesse.find((c) => c.id === attivita.commessa_id) : null;
     const titolo = attivita?.titolo || "Attivita";
-    const descrizione = attivita?.descrizione ? ` — ${attivita.descrizione}` : "";
+    const descrizione = attivita?.descrizione ? ` \u2014 ${attivita.descrizione}` : "";
     const commessaTitolo = commessa?.titolo ? `${commessa.titolo}` : "";
     const lines = [`${titolo}${descrizione}`, commessaTitolo].filter(Boolean);
     matrixQuickInfo.textContent = lines.join("\n");
@@ -1079,8 +1096,8 @@ function openActivityModal(attivita) {
     });
   }
   activityMeta.textContent = commessaLabel
-    ? `${attivita.titolo} • ${commessaLabel} • ${formatDateLocal(start)}`
-    : `${attivita.titolo} • ${formatDateLocal(start)}`;
+    ? `${attivita.titolo} \u2022 ${commessaLabel} \u2022 ${formatDateLocal(start)}`
+    : `${attivita.titolo} \u2022 ${formatDateLocal(start)}`;
   activityModal.classList.remove("hidden");
   activityDurationInput.focus();
 }
@@ -1777,6 +1794,13 @@ function getOwnRisorsaId() {
   return match ? match.id : null;
 }
 
+function getOwnRepartoId() {
+  if (!state.profile) return null;
+  if (state.profile.reparto_id) return state.profile.reparto_id;
+  const match = state.risorse.find((r) => String(r.utente_id || "") === String(state.profile.id));
+  return match ? match.reparto_id || null : null;
+}
+
 function canMoveMatrixActivity(activity, targetRisorsaId = null) {
   if (!state.profile) return false;
   const role = String(state.profile.ruolo || "").trim().toLowerCase();
@@ -2267,7 +2291,7 @@ function calculateWorkload() {
   const withoutPlanned = entries.length - withPlanned;
   const orderedCount = entries.filter((e) => e.ordered).length;
   workloadSummary.textContent =
-    `Range ${formatDateDMY(rangeStart)} → ${formatDateDMY(rangeFinish)}. ` +
+    `Range ${formatDateDMY(rangeStart)} \u2192 ${formatDateDMY(rangeFinish)}. ` +
     `Frames expected: ${entries.length}. Planned dates: ${withPlanned}. ` +
     `Missing planned dates: ${withoutPlanned}. Ordered: ${orderedCount}.`;
 
@@ -2287,7 +2311,7 @@ function calculateWorkload() {
       const weekStart = weekInputToDate(key);
       const weekEnd = weekStart ? addDays(weekStart, 4) : null;
       const headerRange = weekStart && weekEnd
-        ? `${formatDateDMY(weekStart)} → ${formatDateDMY(weekEnd)}`
+        ? `${formatDateDMY(weekStart)} \u2192 ${formatDateDMY(weekEnd)}`
         : "";
       const itemsHtml = list
         .map((entry) => {
@@ -4401,7 +4425,7 @@ function getTodoActivityGroups() {
     .slice()
     .filter((r) => {
       const key = normalizeDeptKey(r.nome || "");
-      return key && key !== "tutti";
+      return key && !key.includes("TUTTI");
     })
     .sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
   const groups = [];
@@ -5119,7 +5143,7 @@ function renderCommesse(list) {
     const risorseHtml = shownRisorse
       .map((r) => {
         const acts = r.attivita && r.attivita.length ? r.attivita.join(", ") : "";
-        const label = acts ? `${r.nome} · ${acts}` : r.nome;
+        const label = acts ? `${r.nome} \u00B7 ${acts}` : r.nome;
         return `<span class="risorsa-tag ${r.deptClass}">${label}</span>`;
       })
       .join("");
@@ -5444,6 +5468,139 @@ function renderReportYearFilter() {
   if (current && years.includes(Number(current))) {
     reportYearFilter.value = current;
   }
+}
+
+function renderTodoYearFilter() {
+  if (!todoYearFilter) return;
+  const years = Array.from(new Set(state.commesse.map((c) => c.anno).filter(Boolean))).sort((a, b) => b - a);
+  const current = todoYearFilter.value;
+  todoYearFilter.innerHTML = `<option value="">Tutti gli anni</option>`;
+  years.forEach((y) => {
+    const opt = document.createElement("option");
+    opt.value = String(y);
+    opt.textContent = String(y);
+    todoYearFilter.appendChild(opt);
+  });
+  if (current && years.includes(Number(current))) {
+    todoYearFilter.value = current;
+    return;
+  }
+  const thisYear = String(new Date().getFullYear());
+  if (years.includes(Number(thisYear))) {
+    todoYearFilter.value = thisYear;
+  }
+}
+
+function getTodoFilters() {
+  const desc = todoDescFilter ? todoDescFilter.value.trim().toLowerCase() : "";
+  const numRaw = todoNumberFilter ? todoNumberFilter.value.trim() : "";
+  const numVal = numRaw ? Number.parseInt(numRaw, 10) : null;
+  const year = todoYearFilter ? todoYearFilter.value : "";
+  const priorityField = todoPriorityField ? todoPriorityField.value : "";
+  const priorityMode = todoPriorityBtn?.dataset.mode || "off";
+  const sortMode = todoSortBtn?.dataset.mode || "off";
+  const showComplete = todoCompleteBtn ? !todoCompleteBtn.classList.contains("active") : true;
+  return { desc, numVal, year, priorityField, priorityMode, sortMode, showComplete };
+}
+
+function renderTodoSortButtonLabel() {
+  if (!todoSortBtn) return;
+  const mode = todoSortBtn.dataset.mode || "off";
+  todoSortBtn.classList.toggle("active", mode !== "off");
+  if (mode === "asc") {
+    todoSortBtn.textContent = "Ordine numero: crescente";
+  } else if (mode === "desc") {
+    todoSortBtn.textContent = "Ordine numero: decrescente";
+  } else {
+    todoSortBtn.textContent = "Ordine numero: OFF";
+  }
+}
+
+function renderTodoCompleteButtonLabel() {
+  if (!todoCompleteBtn) return;
+  todoCompleteBtn.textContent = todoCompleteBtn.classList.contains("active")
+    ? "Complete: nascoste"
+    : "Complete: in mostra";
+}
+
+function renderTodoPriorityButtonLabel() {
+  if (!todoPriorityBtn) return;
+  const mode = todoPriorityBtn.dataset.mode || "off";
+  todoPriorityBtn.classList.toggle("active", mode !== "off");
+  todoPriorityBtn.textContent = mode === "asc" ? "Priorità: crescente" : "Priorità: OFF";
+}
+
+function getTodoPriorityDate(commessa, field) {
+  const parse = (raw) => {
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+    if (d.getFullYear() < 2000 || d.getFullYear() > 2100) return null;
+    return d.getTime();
+  };
+  if (field === "telaio_target") return parse(commessa.data_ordine_telaio);
+  if (field === "telaio_stimato") return parse(commessa.data_consegna_telaio_effettiva);
+  if (field === "prelievo") return parse(commessa.data_prelievo);
+  if (field === "kit_cavi") return parse(commessa.data_arrivo_kit_cavi);
+  if (field === "consegna") {
+    return parse(commessa.data_consegna_macchina || commessa.data_consegna_prevista || commessa.data_consegna);
+  }
+  return null;
+}
+
+function applyTodoFilters(list, columns) {
+  const { desc, numVal, year, priorityField, priorityMode, sortMode, showComplete } = getTodoFilters();
+  const isComplete = (commessa) => {
+    if (!columns.length) return false;
+    return columns.every((col) => getTodoStatusFor(commessa.id, col.titolo, col.reparto) === "fatta");
+  };
+  const isReleasedOrClosed = (commessa) => {
+    const global = getTodoGlobalCommessaStatus(commessa).label;
+    return global === "Rilasciata a prod." || global === "Evasa";
+  };
+  let commesse = list.slice();
+  if (year) {
+    commesse = commesse.filter((c) => String(c.anno || getCommessaYear(c) || "") === year);
+  }
+  if (numVal != null && Number.isFinite(numVal)) {
+    commesse = commesse.filter((c) => Number(c.numero ?? -1) === numVal);
+  }
+  if (desc) {
+    commesse = commesse.filter((c) => {
+      const text = `${c.titolo || ""}`.toLowerCase();
+      return text.includes(desc);
+    });
+  }
+  if (!showComplete) {
+    commesse = commesse.filter((c) => !isComplete(c) && !isReleasedOrClosed(c));
+  }
+  if (priorityMode === "asc" && priorityField) {
+    commesse.sort((a, b) => {
+      const aa = getTodoPriorityDate(a, priorityField);
+      const bb = getTodoPriorityDate(b, priorityField);
+      if (aa == null && bb == null) return compareCommesseDesc(a, b);
+      if (aa == null) return 1;
+      if (bb == null) return -1;
+      if (aa !== bb) return aa - bb;
+      return compareCommesseDesc(a, b);
+    });
+  }
+  if (sortMode === "asc") {
+    commesse.sort((a, b) => {
+      const aa = Number(a.numero ?? Number.POSITIVE_INFINITY);
+      const bb = Number(b.numero ?? Number.POSITIVE_INFINITY);
+      if (aa !== bb) return aa - bb;
+      return compareCommesse(a, b);
+    });
+  } else if (sortMode === "desc") {
+    commesse.sort((a, b) => {
+      const aa = Number(a.numero ?? Number.NEGATIVE_INFINITY);
+      const bb = Number(b.numero ?? Number.NEGATIVE_INFINITY);
+      if (aa !== bb) return bb - aa;
+      return compareCommesseDesc(a, b);
+    });
+  }
+  return commesse;
 }
 
 async function loadCommesseRisorseFor(list) {
@@ -5813,6 +5970,7 @@ async function loadCommesse() {
   state.commesse = data || [];
   renderYearFilter();
   renderReportYearFilter();
+  renderTodoYearFilter();
   applyFilters();
   renderMatrixCommesse();
   renderMatrixCommesseColumn();
@@ -6074,7 +6232,7 @@ function renderMatrix() {
     const isCollapsed = matrixState.collapsedReparti.has(label);
     sectionCell.innerHTML = `
       <button class="matrix-section-toggle" type="button" aria-expanded="${!isCollapsed}">
-        ${isCollapsed ? "▸" : "▾"}
+        ${isCollapsed ? "\u25B8" : "\u25BE"}
       </button>
       <span class="matrix-section-title">${label}</span>
     `;
@@ -6714,7 +6872,7 @@ function buildReportScheduleHtml(commessaId) {
     .map((e) => {
       const start = e.start ? formatDateLocal(e.start) : "-";
       const end = e.end ? formatDateLocal(e.end) : "-";
-      return `<div class="report-schedule-item">${e.titolo} — ${e.risorsa} · ${start} → ${end}</div>`;
+      return `<div class="report-schedule-item">${e.titolo} \u2014 ${e.risorsa} \u00B7 ${start} \u2192 ${end}</div>`;
     })
     .join("");
   return `<div class="report-schedule">${lines}</div>`;
@@ -6745,7 +6903,7 @@ async function loadReportActivitiesFor(commesse) {
       const result = await withTimeout(
           supabase
             .from("attivita")
-            .select("id, commessa_id, titolo, risorsa_id, reparto_id, data_inizio, data_fine, stato")
+            .select("id, commessa_id, titolo, risorsa_id, reparto_id, assegnato_a, data_inizio, data_fine, stato")
             .in("commessa_id", ids),
         FETCH_TIMEOUT_MS
       );
@@ -6761,7 +6919,7 @@ async function loadReportActivitiesFor(commesse) {
     const inList = ids.join(",");
       rows = await fetchTableViaRest(
         "attivita",
-        `select=id,commessa_id,titolo,risorsa_id,reparto_id,data_inizio,data_fine,stato&commessa_id=in.(${inList})`
+        `select=id,commessa_id,titolo,risorsa_id,reparto_id,assegnato_a,data_inizio,data_fine,stato&commessa_id=in.(${inList})`
       );
   }
 
@@ -6785,6 +6943,7 @@ async function loadReportActivitiesFor(commesse) {
       list.push({
         id: row.id,
         risorsaId: row.risorsa_id,
+        assegnatoA: row.assegnato_a || null,
         titolo: row.titolo || "Attivita",
         risorsa:
           row.risorsa_id != null
@@ -6883,38 +7042,200 @@ function getTodoOverrideStatus(commessaId, title) {
   return list.get(normalizePhaseKey(title)) || null;
 }
 
-function getTodoStatusFor(commessaId, title) {
+function getTodoRole() {
+  return String(state.profile?.ruolo || "").trim().toLowerCase();
+}
+
+function getProfileDeptKey() {
+  const repartoId = getOwnRepartoId();
+  if (!repartoId) return "";
+  const reparto = (state.reparti || []).find((r) => String(r.id) === String(repartoId));
+  return normalizeDeptKey(reparto?.nome || "");
+}
+
+function getTodoEntriesForCell(commessaId, title, repartoName = "") {
+  const entries = state.reportActivitiesMap.get(String(commessaId)) || [];
+  const titleKey = normalizePhaseKey(title);
+  const deptKey = normalizeDeptKey(repartoName || "");
+  return entries.filter((entry) => {
+    if (normalizePhaseKey(entry.titolo) !== titleKey) return false;
+    if (!deptKey) return true;
+    return normalizeDeptKey(entry.dept || "") === deptKey;
+  });
+}
+
+function getTodoEditableEntries(entries, repartoName = "") {
+  const role = getTodoRole();
+  if (!Array.isArray(entries) || !entries.length) return [];
+  if (role === "admin") return entries.slice();
+  if (role === "responsabile") {
+    const userDept = getProfileDeptKey();
+    const targetDept = normalizeDeptKey(repartoName || "");
+    if (!userDept || !targetDept || userDept !== targetDept) return [];
+    return entries.slice();
+  }
+  if (role === "operatore") {
+    const ownRisorsaId = getOwnRisorsaId();
+    const profileId = String(state.profile?.id || "");
+    return entries.filter((entry) => {
+      const byRisorsa = ownRisorsaId && String(entry.risorsaId || "") === String(ownRisorsaId);
+      const byAssignee = entry.assegnatoA && String(entry.assegnatoA) === profileId;
+      return Boolean(byRisorsa || byAssignee);
+    });
+  }
+  return [];
+}
+
+function getTodoStatusMenuBlockReason(commessaId, title, repartoName = "") {
+  if (!state.canWrite) return "Permessi insufficienti su questa attivita.";
+  const role = getTodoRole();
+  if (!role || role === "viewer") return "Permessi insufficienti su questa attivita.";
+  if (role === "planner") return "Planner: permessi in sola lettura sui To Dos.";
+  if (role === "admin") return "";
+  const entries = getTodoEntriesForCell(commessaId, title, repartoName);
+  if (role === "responsabile") {
+    const userDept = getProfileDeptKey();
+    const targetDept = normalizeDeptKey(repartoName || "");
+    if (!userDept || !targetDept || userDept !== targetDept) {
+      return "Responsabile: puoi aggiornare solo attivita del tuo reparto.";
+    }
+    return "";
+  }
+  if (role === "operatore") {
+    return getTodoEditableEntries(entries, repartoName).length > 0
+      ? ""
+      : "Operatore: puoi aggiornare solo attivita assegnate a te.";
+  }
+  return "Permessi insufficienti su questa attivita.";
+}
+
+function canOpenTodoStatusMenuForCell(commessaId, title, repartoName = "") {
+  return !getTodoStatusMenuBlockReason(commessaId, title, repartoName);
+}
+
+function getTodoStatusFor(commessaId, title, repartoName = "") {
   const override = getTodoOverrideStatus(commessaId, title);
   if (override === "non_necessaria") return "non_necessaria";
-  const entries = state.reportActivitiesMap.get(String(commessaId)) || [];
-  const key = normalizePhaseKey(title);
-  const matching = entries.filter((e) => normalizePhaseKey(e.titolo) === key);
+  const matching = getTodoEntriesForCell(commessaId, title, repartoName).filter(
+    (entry) => normalizePhaseKey(entry.stato) !== "annullata"
+  );
   if (!matching.length) return "da_schedulare";
   if (matching.some((e) => normalizePhaseKey(e.stato) === "completata")) return "fatta";
   return "schedulata";
 }
 
+const TODO_GLOBAL_STATUS_ORDER = ["In corso", "Rilasciata a prod.", "Evasa"];
+const TODO_GLOBAL_STATUS_TO_DB = {
+  "In corso": "in_corso",
+  "Rilasciata a prod.": "sospesa",
+  Evasa: "chiusa",
+};
+
+function canEditTodoGlobalStatus() {
+  const role = getTodoRole();
+  return role === "admin" || role === "responsabile" || role === "planner";
+}
+
+function getTodoGlobalCommessaStatus(commessa) {
+  const raw = normalizePhaseKey(commessa?.stato || "");
+  if (raw === "in_corso") return { label: "In corso", cls: "todo-global-in-corso" };
+  if (raw === "sospesa") return { label: "Rilasciata a prod.", cls: "todo-global-rilasciata" };
+  if (raw === "chiusa") return { label: "Evasa", cls: "todo-global-evasa" };
+  if (raw.includes("evas")) return { label: "Evasa", cls: "todo-global-evasa" };
+  if (raw.includes("rilasci")) return { label: "Rilasciata a prod.", cls: "todo-global-rilasciata" };
+  if (!raw || raw.includes("corso")) return { label: "In corso", cls: "todo-global-in-corso" };
+  return { label: commessa?.stato || "In corso", cls: "todo-global-in-corso" };
+}
+
+function updateTodoPanelHeaderOffset() {
+  if (!todoSection) return;
+  const todoPanelHeader = todoSection.querySelector(".panel-header");
+  const todoToolbar = todoSection.querySelector(".todo-header");
+  if (todoPanelHeader) {
+    todoSection.style.setProperty("--todo-panel-header-height", `${todoPanelHeader.offsetHeight}px`);
+  }
+  if (todoToolbar) {
+    todoSection.style.setProperty("--todo-toolbar-height", `${todoToolbar.offsetHeight}px`);
+  }
+  if (todoToolbar) {
+    const toolbarRect = todoToolbar.getBoundingClientRect();
+    const row1Raw = getComputedStyle(todoSection).getPropertyValue("--todo-head-row1-height").trim();
+    const row1 = Number.parseFloat(row1Raw);
+    const row1Height = Number.isFinite(row1) ? row1 : 36;
+    const row1Top = Math.max(0, toolbarRect.bottom);
+    const row2Top = Math.max(0, row1Top + row1Height);
+    todoSection.style.setProperty("--todo-head-row1-top", `${row1Top}px`);
+    todoSection.style.setProperty("--todo-head-row2-top", `${row2Top}px`);
+  }
+}
+
+async function updateTodoGlobalStatus(commessa, statusLabel) {
+  if (!commessa?.id) return false;
+  if (!canEditTodoGlobalStatus()) {
+    setStatus("Permessi insufficienti per aggiornare lo stato commessa.", "error");
+    return false;
+  }
+  const dbValue = TODO_GLOBAL_STATUS_TO_DB[statusLabel] || statusLabel;
+  const { error } = await supabase.from("commesse").update({ stato: dbValue }).eq("id", commessa.id);
+  if (error) {
+    setStatus(`Update error: ${error.message}`, "error");
+    return false;
+  }
+  updateCommessaInState(commessa.id, { stato: dbValue });
+  setStatus("Stato commessa aggiornato.", "ok");
+  renderMatrixReport();
+  return true;
+}
+
+function isTodoMenuOpen(menuEl) {
+  return Boolean(menuEl) && !menuEl.classList.contains("hidden");
+}
+
 function renderTodoSection(commesse) {
   if (!todoSection || !todoGrid) return;
   todoLastRendered = commesse || [];
+  updateTodoPanelHeaderOffset();
   if (!state.session) {
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Accedi per vedere i To Dos.</div>`;
     return;
   }
   if (!commesse || !commesse.length) {
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Nessuna commessa.</div>`;
     return;
   }
   if (commesse.length > REPORT_MAX_ITEMS) {
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Troppe commesse (${commesse.length}).</div>`;
     return;
   }
 
   const groups = getTodoActivityGroups();
   if (!groups.length) {
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Nessuna attivita disponibile.</div>`;
     return;
   }
+  const targetPhaseKey = "progettazione termodinamica";
+  const orderedGroups = groups
+    .map((group) => ({
+      ...group,
+      attivita: (group.attivita || [])
+        .slice()
+        .sort((a, b) => {
+          const aTarget = normalizePhaseKey(a) === targetPhaseKey ? 0 : 1;
+          const bTarget = normalizePhaseKey(b) === targetPhaseKey ? 0 : 1;
+          if (aTarget !== bTarget) return aTarget - bTarget;
+          return String(a || "").localeCompare(String(b || ""));
+        }),
+    }))
+    .sort((a, b) => {
+      const aHas = (a.attivita || []).some((name) => normalizePhaseKey(name) === targetPhaseKey);
+      const bHas = (b.attivita || []).some((name) => normalizePhaseKey(name) === targetPhaseKey);
+      if (aHas !== bHas) return aHas ? -1 : 1;
+      return String(a.reparto || "").localeCompare(String(b.reparto || ""));
+    });
 
   const missingData =
     state.reportActivitiesLoading ||
@@ -6923,36 +7244,58 @@ function renderTodoSection(commesse) {
       (c) => !state.reportActivitiesMap.has(String(c.id)) || !state.todoOverridesMap.has(String(c.id))
     );
   if (missingData) {
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Caricamento To Dos...</div>`;
     return;
   }
 
   const columns = [];
-  groups.forEach((g) => {
+  orderedGroups.forEach((g) => {
     g.attivita.forEach((name) => {
       columns.push({ reparto: g.reparto, titolo: name });
     });
   });
+  const filteredCommesse = applyTodoFilters(commesse, columns);
+  if (!filteredCommesse.length) {
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
+    todoGrid.innerHTML = `<div class="report-empty">Nessuna commessa trovata con i filtri To Dos.</div>`;
+    return;
+  }
 
-  const table = document.createElement("div");
-  table.className = "todo-table";
-  table.style.gridTemplateColumns = `240px repeat(${columns.length}, minmax(120px, 1fr))`;
+  const gridCols = `240px 160px repeat(${columns.length}, minmax(120px, 1fr))`;
+  const headerTable = document.createElement("div");
+  headerTable.className = "todo-table todo-table-head";
+  headerTable.style.gridTemplateColumns = gridCols;
+  const bodyTable = document.createElement("div");
+  bodyTable.className = "todo-table todo-table-body";
+  bodyTable.style.gridTemplateColumns = gridCols;
 
   const headerBlank = document.createElement("div");
   headerBlank.className = "todo-cell todo-head";
   headerBlank.style.gridRow = "1";
   headerBlank.style.gridColumn = "1";
   headerBlank.textContent = "";
-  table.appendChild(headerBlank);
+  headerTable.appendChild(headerBlank);
 
-  let colStart = 2;
-  groups.forEach((group) => {
+  const statusBlank = document.createElement("div");
+  statusBlank.className = "todo-cell todo-head";
+  statusBlank.style.gridRow = "1";
+  statusBlank.style.gridColumn = "2";
+  statusBlank.textContent = "";
+  headerTable.appendChild(statusBlank);
+
+  let colStart = 3;
+  orderedGroups.forEach((group) => {
     const cell = document.createElement("div");
     cell.className = "todo-cell todo-head todo-group";
+    const groupKey = normalizeDeptKey(group.reparto || "");
+    if (groupKey.includes("CAD")) cell.classList.add("todo-group-cad");
+    if (groupKey.includes("ELETTR")) cell.classList.add("todo-group-elettrico");
+    if (groupKey.includes("TERMO")) cell.classList.add("todo-group-termodinamico");
     cell.style.gridRow = "1";
     cell.style.gridColumn = `${colStart} / span ${group.attivita.length}`;
     cell.textContent = group.reparto;
-    table.appendChild(cell);
+    headerTable.appendChild(cell);
     colStart += group.attivita.length;
   });
 
@@ -6961,31 +7304,62 @@ function renderTodoSection(commesse) {
   commessaHeader.style.gridRow = "2";
   commessaHeader.style.gridColumn = "1";
   commessaHeader.textContent = "Commessa";
-  table.appendChild(commessaHeader);
+  headerTable.appendChild(commessaHeader);
 
-  colStart = 2;
+  const statusHeader = document.createElement("div");
+  statusHeader.className = "todo-cell todo-head";
+  statusHeader.style.gridRow = "2";
+  statusHeader.style.gridColumn = "2";
+  statusHeader.textContent = "Stato";
+  headerTable.appendChild(statusHeader);
+
+  colStart = 3;
   columns.forEach((col) => {
     const cell = document.createElement("div");
     cell.className = "todo-cell todo-head todo-activity-head";
     cell.style.gridRow = "2";
     cell.style.gridColumn = String(colStart);
     cell.textContent = col.titolo;
-    table.appendChild(cell);
+    headerTable.appendChild(cell);
     colStart += 1;
   });
 
-  commesse.forEach((commessa, idx) => {
-    const rowIndex = idx + 3;
+  filteredCommesse.forEach((commessa, idx) => {
+    const rowIndex = idx + 1;
+    const rowKey = String(commessa.id || "");
     const info = document.createElement("div");
-    info.className = "todo-cell todo-commessa";
+    info.className = "todo-cell todo-commessa todo-commessa-clickable";
     info.style.gridRow = String(rowIndex);
     info.style.gridColumn = "1";
-    info.innerHTML = `<div>${commessa.codice || ""}</div><div class="todo-meta">${commessa.titolo || ""}</div>`;
-    table.appendChild(info);
+    info.dataset.todoRow = rowKey;
+    const numero = commessa.numero != null ? String(commessa.numero) : "-";
+    const anno = commessa.anno != null ? String(commessa.anno) : "-";
+    const titoloFull = String(commessa.titolo || "");
+    const titoloShort = titoloFull.length > 25 ? `${titoloFull.slice(0, 25)}...` : titoloFull;
+    info.innerHTML = `<div>${numero} · ${anno}</div><div class="todo-meta" title="${escapeHtml(titoloFull)}">${escapeHtml(titoloShort)}</div>`;
+    info.addEventListener("click", () => {
+      selectCommessa(commessa.id, { openModal: true });
+    });
+    bodyTable.appendChild(info);
 
-    colStart = 2;
+    const globalStatus = getTodoGlobalCommessaStatus(commessa);
+    const statusCell = document.createElement("div");
+    statusCell.className = "todo-cell todo-commessa-status";
+    statusCell.style.gridRow = String(rowIndex);
+    statusCell.style.gridColumn = "2";
+    statusCell.dataset.todoRow = rowKey;
+    if (canEditTodoGlobalStatus()) statusCell.classList.add("todo-commessa-status-clickable");
+    statusCell.innerHTML = `<span class="todo-global-pill ${globalStatus.cls}">${globalStatus.label}</span>`;
+    statusCell.addEventListener("click", async () => {
+      const pill = statusCell.querySelector(".todo-global-pill");
+      const rect = (pill || statusCell).getBoundingClientRect();
+      openTodoGlobalStatusMenu(statusCell, commessa, rect.left + rect.width / 2, rect.bottom);
+    });
+    bodyTable.appendChild(statusCell);
+
+    colStart = 3;
     columns.forEach((col) => {
-      const status = getTodoStatusFor(commessa.id, col.titolo);
+      const status = getTodoStatusFor(commessa.id, col.titolo, col.reparto);
       const cell = document.createElement("div");
       cell.className = "todo-cell";
       cell.style.gridRow = String(rowIndex);
@@ -7009,43 +7383,131 @@ function renderTodoSection(commesse) {
       cell.innerHTML = `<span class="todo-status ${statusClass}">${statusLabel}</span>`;
       cell.dataset.commessaId = commessa.id;
       cell.dataset.attivita = col.titolo;
-      cell.addEventListener("pointerdown", (event) => {
-        if (!state.canWrite) return;
+      cell.dataset.reparto = col.reparto || "";
+      cell.dataset.todoRow = rowKey;
+      const statusPill = cell.querySelector(".todo-status");
+      const openMenuOnLongPress = (event) => {
         todoLongPressStart = { x: event.clientX, y: event.clientY };
         clearTimeout(todoLongPressTimer);
         todoLongPressTimer = window.setTimeout(() => {
+          todoLongPressSuppress = true;
           openTodoStatusMenu(cell, event.clientX, event.clientY);
         }, 550);
-      });
-      cell.addEventListener("pointerup", () => clearTimeout(todoLongPressTimer));
-      cell.addEventListener("pointerleave", () => clearTimeout(todoLongPressTimer));
-      cell.addEventListener("pointercancel", () => clearTimeout(todoLongPressTimer));
+      };
+      const clearLongPress = () => {
+        clearTimeout(todoLongPressTimer);
+        todoLongPressStart = null;
+      };
+      if (statusPill) {
+        statusPill.addEventListener("click", (event) => {
+          if (todoLongPressSuppress) {
+            todoLongPressSuppress = false;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = statusPill.getBoundingClientRect();
+          const x = Number.isFinite(event.clientX) ? event.clientX : rect.left + rect.width / 2;
+          const y = Number.isFinite(event.clientY) ? event.clientY : rect.top + rect.height / 2;
+          openTodoStatusMenu(cell, x, y);
+        });
+        statusPill.addEventListener("pointerdown", openMenuOnLongPress);
+        statusPill.addEventListener("pointerup", clearLongPress);
+        statusPill.addEventListener("pointerleave", clearLongPress);
+        statusPill.addEventListener("pointercancel", clearLongPress);
+      }
       cell.addEventListener("contextmenu", (event) => {
-        if (!state.canWrite) return;
         event.preventDefault();
         openTodoStatusMenu(cell, event.clientX, event.clientY);
       });
-      table.appendChild(cell);
+      bodyTable.appendChild(cell);
       colStart += 1;
     });
   });
 
   todoGrid.innerHTML = "";
-  todoGrid.appendChild(table);
+  if (todoHeaderTableHost) {
+    todoHeaderTableHost.innerHTML = "";
+    todoHeaderTableHost.appendChild(headerTable);
+  } else {
+    todoGrid.appendChild(headerTable);
+  }
+  todoGrid.appendChild(bodyTable);
+  updateTodoPanelHeaderOffset();
 }
 
 function openTodoStatusMenu(cell, x, y) {
   if (!todoStatusMenu || !cell) return;
+  closeTodoGlobalStatusMenu();
   const commessaId = cell.dataset.commessaId;
   const titolo = cell.dataset.attivita;
+  const reparto = cell.dataset.reparto || "";
   if (!commessaId || !titolo) return;
-  todoMenuTarget = { commessaId, titolo };
-  const isNonNec = getTodoOverrideStatus(commessaId, titolo) === "non_necessaria";
-  const setBtn = todoStatusMenu.querySelector('[data-action="set"]');
-  const clearBtn = todoStatusMenu.querySelector('[data-action="clear"]');
-  if (setBtn) setBtn.disabled = isNonNec;
-  if (clearBtn) clearBtn.disabled = !isNonNec;
+  const denyReason = getTodoStatusMenuBlockReason(commessaId, titolo, reparto);
+  if (denyReason) {
+    setStatus(denyReason, "error");
+    return;
+  }
+  const rowKey = cell.dataset.todoRow || "";
+
+  const role = getTodoRole();
+  const entries = getTodoEntriesForCell(commessaId, titolo, reparto);
+  const editableEntries = getTodoEditableEntries(entries, reparto);
+  const currentStatus = getTodoStatusFor(commessaId, titolo, reparto);
+  const actionDefs =
+    role === "operatore"
+      ? [
+          { action: "planned", label: "PLANNED" },
+          { action: "done", label: "DONE" },
+        ]
+      : [
+          { action: "to_plan", label: "TO PLAN" },
+          { action: "planned", label: "PLANNED" },
+          { action: "done", label: "DONE" },
+          { action: "non_necessaria", label: "NON NECESSARIA" },
+        ];
+  if (currentStatus === "schedulata") {
+    actionDefs.unshift({ action: "go_matrix", label: "\u2197 APRI IN MATRICE" });
+  }
+  todoStatusMenu.innerHTML = "";
+  actionDefs.forEach((def) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.action = def.action;
+    button.textContent = def.label;
+    let blockReason = "";
+    const requiresEditableRows = def.action === "planned" || def.action === "done";
+    if (requiresEditableRows && !editableEntries.length) {
+      if (role === "operatore") {
+        blockReason = "Operatore: puoi impostare stato solo su task assegnate a te.";
+      } else if (role === "responsabile") {
+        blockReason = "Responsabile: puoi aggiornare solo task del tuo reparto.";
+      } else {
+        blockReason = "Attivita non modificabile in questo contesto.";
+      }
+    }
+    if (!blockReason && def.action === "go_matrix" && !getTodoMatrixJumpEntry({ commessaId, titolo, reparto })) {
+      blockReason = "Nessuna attivita pianificata trovata in matrice.";
+    }
+    if (!blockReason && def.action === "to_plan" && role === "operatore") {
+      blockReason = "Operatore: TO PLAN non disponibile da questo menu.";
+    }
+    if (!blockReason && def.action === "non_necessaria" && currentStatus === "non_necessaria") {
+      blockReason = "Questa attivita e gia NON NECESSARIA.";
+    }
+    if (blockReason) {
+      button.dataset.blocked = "1";
+      button.dataset.blockReason = blockReason;
+      button.classList.add("is-blocked");
+    }
+    todoStatusMenu.appendChild(button);
+  });
+  todoMenuTarget = { commessaId, titolo, reparto };
+  todoMenuAnchorEl = cell.querySelector(".todo-status") || cell;
   todoStatusMenu.classList.remove("hidden");
+  setTodoMenuFocus(rowKey);
   const padding = 10;
   let left = x + 8;
   let top = y + 8;
@@ -7064,10 +7526,173 @@ function openTodoStatusMenu(cell, x, y) {
   });
 }
 
+function repositionTodoStatusMenuToAnchor() {
+  if (!todoStatusMenu || todoStatusMenu.classList.contains("hidden")) return;
+  if (!todoMenuAnchorEl || !document.body.contains(todoMenuAnchorEl)) return;
+  const anchorRect = todoMenuAnchorEl.getBoundingClientRect();
+  const padding = 10;
+  let left = anchorRect.left + anchorRect.width / 2 + 8;
+  let top = anchorRect.bottom + 8;
+  todoStatusMenu.style.left = `${left}px`;
+  todoStatusMenu.style.top = `${top}px`;
+  const rect = todoStatusMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth - padding) {
+    left = Math.max(padding, window.innerWidth - rect.width - padding);
+  }
+  if (rect.bottom > window.innerHeight - padding) {
+    top = Math.max(padding, anchorRect.top - rect.height - 8);
+  }
+  if (left < padding) left = padding;
+  if (top < padding) top = padding;
+  todoStatusMenu.style.left = `${left}px`;
+  todoStatusMenu.style.top = `${top}px`;
+}
+
+function setTodoMenuFocus(rowKey = "") {
+  todoFocusedRowKey = String(rowKey || "");
+  document.querySelectorAll(".todo-cell.todo-cell-focus").forEach((cell) => {
+    cell.classList.remove("todo-cell-focus");
+  });
+  if (todoFocusOverlay) todoFocusOverlay.classList.remove("hidden");
+  document.body.classList.add("todo-menu-open");
+  if (!todoFocusedRowKey) return;
+  document.querySelectorAll(".todo-cell[data-todo-row]").forEach((cell) => {
+    if (String(cell.dataset.todoRow || "") === todoFocusedRowKey) {
+      cell.classList.add("todo-cell-focus");
+    }
+  });
+}
+
 function closeTodoStatusMenu() {
   if (!todoStatusMenu) return;
   todoStatusMenu.classList.add("hidden");
   todoMenuTarget = null;
+  todoMenuAnchorEl = null;
+  releaseTodoMenuFocusIfNoneOpen();
+}
+
+function releaseTodoMenuFocusIfNoneOpen() {
+  if (isTodoMenuOpen(todoStatusMenu) || isTodoMenuOpen(todoGlobalStatusMenu)) return;
+  todoFocusedRowKey = null;
+  document.querySelectorAll(".todo-cell.todo-cell-focus").forEach((cell) => {
+    cell.classList.remove("todo-cell-focus");
+  });
+  document.body.classList.remove("todo-menu-open");
+  if (todoFocusOverlay) todoFocusOverlay.classList.add("hidden");
+}
+
+function openTodoGlobalStatusMenu(cell, commessa, x, y) {
+  if (!todoGlobalStatusMenu || !cell || !commessa?.id) return;
+  closeTodoStatusMenu();
+  if (!canEditTodoGlobalStatus()) {
+    setStatus("Solo admin, responsabile e planner possono aggiornare questo stato.", "error");
+    return;
+  }
+  const current = getTodoGlobalCommessaStatus(commessa).label;
+  todoGlobalStatusMenu.innerHTML = "";
+  TODO_GLOBAL_STATUS_ORDER.forEach((label) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.status = label;
+    button.textContent = label.toUpperCase();
+    if (label === current) {
+      button.classList.add("active");
+      button.disabled = true;
+    }
+    todoGlobalStatusMenu.appendChild(button);
+  });
+  todoGlobalMenuTarget = { commessaId: commessa.id };
+  todoGlobalMenuAnchorEl = cell.querySelector(".todo-global-pill") || cell;
+  todoGlobalMenuSuppress = true;
+  setTodoMenuFocus(cell.dataset.todoRow || "");
+  todoGlobalStatusMenu.classList.remove("hidden");
+  const padding = 10;
+  let left = x + 8;
+  let top = y + 8;
+  todoGlobalStatusMenu.style.left = `${left}px`;
+  todoGlobalStatusMenu.style.top = `${top}px`;
+  requestAnimationFrame(() => {
+    const rect = todoGlobalStatusMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth - padding) {
+      left = Math.max(padding, window.innerWidth - rect.width - padding);
+    }
+    if (rect.bottom > window.innerHeight - padding) {
+      top = Math.max(padding, window.innerHeight - rect.height - padding);
+    }
+    todoGlobalStatusMenu.style.left = `${left}px`;
+    todoGlobalStatusMenu.style.top = `${top}px`;
+  });
+}
+
+function closeTodoGlobalStatusMenu() {
+  if (!todoGlobalStatusMenu) return;
+  todoGlobalStatusMenu.classList.add("hidden");
+  todoGlobalMenuTarget = null;
+  todoGlobalMenuAnchorEl = null;
+  releaseTodoMenuFocusIfNoneOpen();
+}
+
+function repositionTodoGlobalStatusMenuToAnchor() {
+  if (!todoGlobalStatusMenu || todoGlobalStatusMenu.classList.contains("hidden")) return;
+  if (!todoGlobalMenuAnchorEl || !document.body.contains(todoGlobalMenuAnchorEl)) return;
+  const anchorRect = todoGlobalMenuAnchorEl.getBoundingClientRect();
+  const padding = 10;
+  let left = anchorRect.left + anchorRect.width / 2 + 8;
+  let top = anchorRect.bottom + 8;
+  todoGlobalStatusMenu.style.left = `${left}px`;
+  todoGlobalStatusMenu.style.top = `${top}px`;
+  const rect = todoGlobalStatusMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth - padding) {
+    left = Math.max(padding, window.innerWidth - rect.width - padding);
+  }
+  if (rect.bottom > window.innerHeight - padding) {
+    top = Math.max(padding, anchorRect.top - rect.height - 8);
+  }
+  if (left < padding) left = padding;
+  if (top < padding) top = padding;
+  todoGlobalStatusMenu.style.left = `${left}px`;
+  todoGlobalStatusMenu.style.top = `${top}px`;
+}
+
+function scrollToPanelTop(panelEl) {
+  if (!panelEl) return;
+  const rect = panelEl.getBoundingClientRect();
+  const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
+  const gap = typeof getSectionToolbarGap === "function" ? getSectionToolbarGap() : 0;
+  const top = rect.top + window.scrollY - toolbarOffset - gap;
+  window.scrollTo({ top: Math.max(0, top), left: 0, behavior: "smooth" });
+}
+
+function getTodoMatrixJumpEntry(target) {
+  if (!target) return null;
+  const entries = getTodoEntriesForCell(target.commessaId, target.titolo, target.reparto).filter(
+    (entry) => normalizePhaseKey(entry.stato) !== "annullata"
+  );
+  if (!entries.length) return null;
+  const plannedEntries = entries.filter((entry) => normalizePhaseKey(entry.stato) === "pianificata");
+  const source = plannedEntries.length ? plannedEntries : entries;
+  source.sort((a, b) => {
+    const at = a.start instanceof Date ? a.start.getTime() : Number.MAX_SAFE_INTEGER;
+    const bt = b.start instanceof Date ? b.start.getTime() : Number.MAX_SAFE_INTEGER;
+    return at - bt;
+  });
+  return source[0] || null;
+}
+
+async function openTodoActivityInMatrix(target) {
+  const entry = getTodoMatrixJumpEntry(target);
+  if (!entry) {
+    setStatus("Nessuna attivita pianificata trovata in matrice.", "error");
+    return false;
+  }
+  if (matrixPanel) {
+    matrixPanel.classList.remove("collapsed");
+    scrollToPanelTop(matrixPanel);
+  }
+  const startTs = entry.start instanceof Date ? entry.start.getTime() : null;
+  await jumpToMatrixActivity(target.commessaId, startTs, entry.id, entry.risorsaId);
+  setStatus("Aperta attivita in matrice.", "ok");
+  return true;
 }
 
 async function setTodoOverride(commessaId, titolo, enabled) {
@@ -7100,7 +7725,63 @@ async function setTodoOverride(commessaId, titolo, enabled) {
     list.delete(normalizePhaseKey(titolo));
   }
   state.todoOverridesMap.set(key, list);
-  renderTodoSection(todoLastRendered);
+}
+
+async function updateTodoActivitiesStatus(ids, stato) {
+  if (!ids.length) return null;
+  const { error } = await supabase.from("attivita").update({ stato }).in("id", ids);
+  return error || null;
+}
+
+async function refreshTodoData() {
+  if (!todoLastRendered || !todoLastRendered.length) {
+    renderTodoSection(todoLastRendered);
+    return;
+  }
+  await loadReportActivitiesFor(todoLastRendered);
+  await loadTodoOverridesFor(todoLastRendered);
+}
+
+async function applyTodoStatusAction(action, target) {
+  if (!target) return false;
+  if (action === "go_matrix") {
+    return openTodoActivityInMatrix(target);
+  }
+  const { commessaId, titolo, reparto } = target;
+  const entries = getTodoEntriesForCell(commessaId, titolo, reparto);
+  const editableEntries = getTodoEditableEntries(entries, reparto);
+  const editableIds = editableEntries.map((entry) => entry.id).filter(Boolean);
+
+  if (action === "planned" || action === "done") {
+    if (!editableIds.length) {
+      setStatus("Permessi insufficienti su questa attivita.", "error");
+      return false;
+    }
+    await setTodoOverride(commessaId, titolo, false);
+    const nextState = action === "done" ? "completata" : "pianificata";
+    const error = await updateTodoActivitiesStatus(editableIds, nextState);
+    if (error) {
+      setStatus(`Update error: ${error.message}`, "error");
+      return false;
+    }
+  } else if (action === "to_plan") {
+    await setTodoOverride(commessaId, titolo, false);
+    if (editableIds.length) {
+      const error = await updateTodoActivitiesStatus(editableIds, "annullata");
+      if (error) {
+        setStatus(`Update error: ${error.message}`, "error");
+        return false;
+      }
+    }
+  } else if (action === "non_necessaria") {
+    await setTodoOverride(commessaId, titolo, true);
+  } else {
+    return false;
+  }
+
+  await refreshTodoData();
+  setStatus("Status aggiornato.", "ok");
+  return true;
 }
 
 function renderReportGantt(commesse, today) {
@@ -7379,7 +8060,7 @@ function renderReportGantt(commesse, today) {
         milestone.textContent = "T";
         milestone.title = highlightPlannedOnTarget
           ? `Ordine telaio (stimato): ${formatDateDMY(ordineDay)}`
-          : `Ordine telaio (target): ${formatDateDMY(ordineDay)}${markTargetDelivered ? " • consegnato" : ""}`;
+          : `Ordine telaio (target): ${formatDateDMY(ordineDay)}${markTargetDelivered ? " \u2022 consegnato" : ""}`;
         milestone.dataset.commessaId = String(c.id);
         milestone.dataset.field = "ordine";
         if (canEditGanttMilestone("ordine")) {
@@ -7407,7 +8088,7 @@ function renderReportGantt(commesse, today) {
         } else {
           milestone.classList.add("is-locked");
           milestone.setAttribute("aria-disabled", "true");
-          milestone.title += " • bloccato";
+          milestone.title += " \u2022 bloccato";
         }
         trackContent.appendChild(milestone);
         stackMilestone(milestone, formatDateLocal(ordineDay), 2);
@@ -7429,7 +8110,7 @@ function renderReportGantt(commesse, today) {
         }
         if (telaioConsegnato) effMarker.classList.add("is-telaio-delivered");
         effMarker.title = `Ordine telaio (stimato): ${formatDateDMY(ordinePianificatoDay)}${
-          telaioConsegnato ? " • ordinato" : ""
+          telaioConsegnato ? " \u2022 ordinato" : ""
         }`;
         effMarker.dataset.commessaId = String(c.id);
         effMarker.dataset.field = "ordine_pianificato";
@@ -7485,7 +8166,7 @@ function renderReportGantt(commesse, today) {
         kitMarker.type = "button";
         kitMarker.className = "report-gantt-milestone is-kit-cavi";
         kitMarker.style.left = `${kitLeft}%`;
-        kitMarker.textContent = "🔌";
+        kitMarker.textContent = "\uD83D\uDD0C";
         kitMarker.title = `Arrivo kit cavi: ${formatDateDMY(kitCaviDay)}`;
         kitMarker.dataset.commessaId = String(c.id);
         kitMarker.dataset.field = "kit_cavi";
@@ -7514,7 +8195,7 @@ function renderReportGantt(commesse, today) {
         } else {
           kitMarker.classList.add("is-locked");
           kitMarker.setAttribute("aria-disabled", "true");
-          kitMarker.title += " • bloccato";
+          kitMarker.title += " \u2022 bloccato";
         }
         trackContent.appendChild(kitMarker);
         stackMilestone(kitMarker, formatDateLocal(kitCaviDay), 2);
@@ -7528,7 +8209,7 @@ function renderReportGantt(commesse, today) {
         prelievoMarker.type = "button";
         prelievoMarker.className = "report-gantt-milestone is-prelievo";
         prelievoMarker.style.left = `${prelievoLeft}%`;
-        prelievoMarker.textContent = "📦";
+        prelievoMarker.textContent = "\uD83D\uDCE6";
         prelievoMarker.title = `Prelievo materiali: ${formatDateDMY(prelievoDay)}`;
         prelievoMarker.dataset.commessaId = String(c.id);
         prelievoMarker.dataset.field = "prelievo";
@@ -7557,7 +8238,7 @@ function renderReportGantt(commesse, today) {
         } else {
           prelievoMarker.classList.add("is-locked");
           prelievoMarker.setAttribute("aria-disabled", "true");
-          prelievoMarker.title += " • bloccato";
+          prelievoMarker.title += " \u2022 bloccato";
         }
         trackContent.appendChild(prelievoMarker);
         stackMilestone(prelievoMarker, formatDateLocal(prelievoDay), 2);
@@ -7571,10 +8252,10 @@ function renderReportGantt(commesse, today) {
       consegna.className = "report-gantt-milestone is-consegna";
       consegna.style.left = `${consegnaLeft}%`;
       const transport = c.trasporto_consegna || "van";
-      consegna.textContent = transport === "ship" ? "🚢" : "🚚";
+      consegna.textContent = transport === "ship" ? "\uD83D\uDEA2" : "\uD83D\uDE9A";
       consegna.title =
         (transport === "ship" ? "Delivery by ship" : "Delivery by van") +
-        ` • ${formatDateDMY(targetDay)}`;
+        ` \u2022 ${formatDateDMY(targetDay)}`;
       consegna.dataset.commessaId = String(c.id);
       consegna.dataset.field = "consegna";
       consegna.dataset.transport = transport;
@@ -7603,7 +8284,7 @@ function renderReportGantt(commesse, today) {
       } else {
         consegna.classList.add("is-locked");
         consegna.setAttribute("aria-disabled", "true");
-        consegna.title += " • bloccato";
+        consegna.title += " \u2022 bloccato";
       }
       trackContent.appendChild(consegna);
       stackMilestone(consegna, formatDateLocal(targetDay), 2);
@@ -7669,7 +8350,7 @@ function renderReportGantt(commesse, today) {
           bar.style.width = `${width}%`;
           bar.style.top = `${topPadding + laneIndex * laneHeight}px`;
           bar.style.height = `${barHeight}px`;
-          bar.title = `${dept.label}: ${formatDateDMY(range.start)} → ${formatDateDMY(range.end)}`;
+          bar.title = `${dept.label}: ${formatDateDMY(range.start)} \u2192 ${formatDateDMY(range.end)}`;
           bar.addEventListener("click", (e) => {
             e.stopPropagation();
             showReportDeptMenu(e.clientX, e.clientY, dept.label, schedule, dept.key, c.id);
@@ -8501,6 +9182,52 @@ if (yearFilter) yearFilter.addEventListener("change", applyFilters);
 if (reportDescFilter) reportDescFilter.addEventListener("input", renderMatrixReport);
 if (reportNumberFilter) reportNumberFilter.addEventListener("input", renderMatrixReport);
 if (reportYearFilter) reportYearFilter.addEventListener("change", renderMatrixReport);
+if (todoDescFilter) todoDescFilter.addEventListener("input", renderMatrixReport);
+if (todoNumberFilter) todoNumberFilter.addEventListener("input", renderMatrixReport);
+if (todoYearFilter) todoYearFilter.addEventListener("change", renderMatrixReport);
+if (todoPriorityField) todoPriorityField.addEventListener("change", renderMatrixReport);
+if (todoPriorityBtn) {
+  renderTodoPriorityButtonLabel();
+  todoPriorityBtn.addEventListener("click", () => {
+    const mode = todoPriorityBtn.dataset.mode || "off";
+    const next = mode === "off" ? "asc" : "off";
+    todoPriorityBtn.dataset.mode = next;
+    renderTodoPriorityButtonLabel();
+    renderMatrixReport();
+  });
+}
+if (todoSortBtn) {
+  renderTodoSortButtonLabel();
+  todoSortBtn.addEventListener("click", () => {
+    const mode = todoSortBtn.dataset.mode || "off";
+    const next = mode === "off" ? "asc" : mode === "asc" ? "desc" : "off";
+    todoSortBtn.dataset.mode = next;
+    renderTodoSortButtonLabel();
+    renderMatrixReport();
+  });
+}
+if (todoCompleteBtn) {
+  renderTodoCompleteButtonLabel();
+  todoCompleteBtn.addEventListener("click", () => {
+    todoCompleteBtn.classList.toggle("active");
+    renderTodoCompleteButtonLabel();
+    renderMatrixReport();
+  });
+}
+if (todoGrid && todoHeaderTableHost) {
+  todoGrid.addEventListener("scroll", () => {
+    if (todoScrollSyncLock) return;
+    todoScrollSyncLock = true;
+    todoHeaderTableHost.scrollLeft = todoGrid.scrollLeft;
+    todoScrollSyncLock = false;
+  });
+  todoHeaderTableHost.addEventListener("scroll", () => {
+    if (todoScrollSyncLock) return;
+    todoScrollSyncLock = true;
+    todoGrid.scrollLeft = todoHeaderTableHost.scrollLeft;
+    todoScrollSyncLock = false;
+  });
+}
 if (reportHidePast) {
   reportHidePast.textContent = reportHidePast.classList.contains("active")
     ? "Passato: nascosto"
@@ -9199,6 +9926,7 @@ sectionLinks.forEach((btn) => {
 const updateSectionToolbarOffset = () => {
   const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
   document.documentElement.style.setProperty("--section-toolbar-h", `${toolbarOffset}px`);
+  updateTodoPanelHeaderOffset();
 };
 updateSectionToolbarOffset();
 window.addEventListener("resize", updateSectionToolbarOffset);
@@ -9210,21 +9938,62 @@ if (todoStatusMenu) {
   todoStatusMenu.addEventListener("click", async (event) => {
     const target = event.target.closest("button");
     if (!target || !todoMenuTarget) return;
-    const action = target.dataset.action;
-    if (action === "set") {
-      await setTodoOverride(todoMenuTarget.commessaId, todoMenuTarget.titolo, true);
-      closeTodoStatusMenu();
+    if (target.dataset.blocked === "1") {
+      setStatus(target.dataset.blockReason || "Azione non disponibile.", "error");
+      return;
     }
-    if (action === "clear") {
-      await setTodoOverride(todoMenuTarget.commessaId, todoMenuTarget.titolo, false);
+    const action = target.dataset.action;
+    if (!action) return;
+    const updated = await applyTodoStatusAction(action, todoMenuTarget);
+    if (updated) {
       closeTodoStatusMenu();
     }
   });
 }
+if (todoGlobalStatusMenu) {
+  todoGlobalStatusMenu.addEventListener("click", async (event) => {
+    const target = event.target.closest("button");
+    if (!target || !todoGlobalMenuTarget) return;
+    const statusLabel = target.dataset.status;
+    if (!statusLabel) return;
+    const commessa =
+      (state.commesse || []).find((c) => String(c.id) === String(todoGlobalMenuTarget.commessaId)) ||
+      (todoLastRendered || []).find((c) => String(c.id) === String(todoGlobalMenuTarget.commessaId));
+    if (!commessa) return;
+    const updated = await updateTodoGlobalStatus(commessa, statusLabel);
+    if (updated) closeTodoGlobalStatusMenu();
+  });
+}
+if (todoFocusOverlay) {
+  todoFocusOverlay.addEventListener("click", () => {
+    closeTodoStatusMenu();
+    closeTodoGlobalStatusMenu();
+  });
+}
+window.addEventListener(
+  "scroll",
+  () => {
+    repositionTodoStatusMenuToAnchor();
+    repositionTodoGlobalStatusMenuToAnchor();
+  },
+  { passive: true, capture: true }
+);
+window.addEventListener("resize", () => {
+  updateTodoPanelHeaderOffset();
+  repositionTodoStatusMenuToAnchor();
+  repositionTodoGlobalStatusMenuToAnchor();
+});
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeTodoStatusMenu();
+  if (e.key === "Escape") {
+    closeTodoStatusMenu();
+    closeTodoGlobalStatusMenu();
+  }
 });
 document.addEventListener("click", (e) => {
+  const skipTodoDismiss = todoLongPressSuppress;
+  if (todoLongPressSuppress) todoLongPressSuppress = false;
+  const skipTodoGlobalDismiss = todoGlobalMenuSuppress;
+  if (todoGlobalMenuSuppress) todoGlobalMenuSuppress = false;
   if (matrixQuickMenu && !matrixQuickMenu.classList.contains("hidden")) {
     if (!e.target.closest("#matrixQuickMenu")) {
       closeMatrixQuickMenu();
@@ -9245,9 +10014,14 @@ document.addEventListener("click", (e) => {
       closeMilestonePicker();
     }
   }
-  if (todoStatusMenu && !todoStatusMenu.classList.contains("hidden")) {
+  if (todoStatusMenu && !todoStatusMenu.classList.contains("hidden") && !skipTodoDismiss) {
     if (!e.target.closest("#todoStatusMenu")) {
       closeTodoStatusMenu();
+    }
+  }
+  if (todoGlobalStatusMenu && !todoGlobalStatusMenu.classList.contains("hidden") && !skipTodoGlobalDismiss) {
+    if (!e.target.closest("#todoGlobalStatusMenu")) {
+      closeTodoGlobalStatusMenu();
     }
   }
   if (commessaLongPressSuppress) {
@@ -9283,3 +10057,5 @@ const getSectionToolbarGap = () => {
   const value = Number.parseFloat(raw);
   return Number.isFinite(value) ? value : 0;
 };
+
+

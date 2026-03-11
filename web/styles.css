@@ -671,6 +671,10 @@ body.theme-dark .calendar-card.calendar-elett {
   gap: 12px;
 }
 
+.todo-panel .panel-body {
+  gap: 0;
+}
+
 .panel.collapsed .panel-body {
   display: none;
 }
@@ -2942,10 +2946,32 @@ body.theme-dark .report-commessa-link:hover {
 
 .todo-header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 0 10px;
+  margin: 0;
+  flex-wrap: wrap;
+  position: sticky;
+  top: calc(var(--todo-panel-header-height, 58px) + var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
+  z-index: 16;
+  background: rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(215, 219, 227, 0.7);
+  padding: 6px 8px;
+}
+
+.todo-header-table-host {
+  width: calc(100% + 16px);
+  margin: 6px -8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+  background: #f9fbff;
 }
 
 .todo-header h3 {
@@ -2959,16 +2985,45 @@ body.theme-dark .report-commessa-link:hover {
   color: var(--muted);
 }
 
+.todo-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.todo-filters input,
+.todo-filters select {
+  min-width: 120px;
+}
+
+.todo-toggle-btn.active {
+  background: rgba(110, 86, 207, 0.15);
+  border-color: rgba(110, 86, 207, 0.45);
+  color: var(--ink);
+}
+
 .todo-grid {
   border: 1px solid var(--border);
-  border-radius: 12px;
-  overflow: auto;
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  overflow-x: auto;
+  overflow-y: visible;
   background: #f9fbff;
 }
 
 .todo-table {
   display: grid;
   min-width: 900px;
+}
+
+.todo-table-head {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+
+.todo-table-body .todo-cell {
+  border-top: none;
 }
 
 .todo-cell {
@@ -2992,9 +3047,38 @@ body.theme-dark .report-commessa-link:hover {
   font-size: 10px;
 }
 
+.todo-head-sticky {
+  position: sticky;
+  z-index: 18;
+  background: #f3f6fb;
+}
+
+.todo-head-sticky-primary {
+  top: var(--todo-head-row1-top, 0px);
+}
+
+.todo-head-sticky-secondary {
+  top: var(--todo-head-row2-top, 36px);
+}
+
 .todo-group {
   text-align: center;
   font-weight: 600;
+}
+
+.todo-group.todo-group-cad {
+  background: #e9f7ef;
+  color: #1f5d3f;
+}
+
+.todo-group.todo-group-elettrico {
+  background: #fff6cc;
+  color: #6b5600;
+}
+
+.todo-group.todo-group-termodinamico {
+  background: #e8f3ff;
+  color: #2b4b7c;
 }
 
 .todo-activity-head {
@@ -3018,6 +3102,46 @@ body.theme-dark .report-commessa-link:hover {
   font-weight: 400;
 }
 
+.todo-commessa-status {
+  background: #f9fbff;
+}
+
+.todo-commessa-status-clickable {
+  cursor: pointer;
+}
+
+.todo-global-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 118px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.todo-global-in-corso {
+  background: #e8f0ff;
+  color: #2b4b7c;
+  border-color: #cddcff;
+}
+
+.todo-global-rilasciata {
+  background: #efe9ff;
+  color: #4f3d8d;
+  border-color: #d7cbff;
+}
+
+.todo-global-evasa {
+  background: #e6f6ee;
+  color: #1f5d3f;
+  border-color: #c8e9d6;
+}
+
 .todo-status {
   display: inline-flex;
   align-items: center;
@@ -3030,6 +3154,15 @@ body.theme-dark .report-commessa-link:hover {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+}
+
+.todo-status:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
+  filter: saturate(1.08);
 }
 
 .todo-status.todo-da-schedulare {
@@ -3057,8 +3190,8 @@ body.theme-dark .report-commessa-link:hover {
 }
 
 .todo-status-menu {
-  position: absolute;
-  z-index: 40;
+  position: fixed;
+  z-index: 220;
   background: #ffffff;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -3078,11 +3211,27 @@ body.theme-dark .report-commessa-link:hover {
   font-size: 12px;
   cursor: pointer;
   text-align: left;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.todo-status-menu button:hover:not(:disabled) {
+  background: #e6ecf9;
+  transform: translateY(-1px);
+}
+
+.todo-status-menu button.active {
+  background: #e0e9ff;
+  color: #2b4b7c;
 }
 
 .todo-status-menu button:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
+  cursor: pointer;
+}
+
+.todo-status-menu button.is-blocked {
+  opacity: 0.52;
+  cursor: pointer;
 }
 
 body.theme-dark .todo-section {
@@ -3107,6 +3256,39 @@ body.theme-dark .todo-commessa {
   background: #0f172a;
 }
 
+body.theme-dark .todo-commessa-status {
+  background: #0f172a;
+}
+
+body.theme-dark .todo-head-sticky {
+  background: rgba(17, 28, 51, 0.9);
+}
+
+body.theme-dark .todo-group.todo-group-cad {
+  background: rgba(40, 87, 62, 0.55);
+  color: #d1fae5;
+}
+
+body.theme-dark .todo-group.todo-group-elettrico {
+  background: rgba(92, 74, 17, 0.62);
+  color: #fde68a;
+}
+
+body.theme-dark .todo-group.todo-group-termodinamico {
+  background: rgba(34, 62, 99, 0.58);
+  color: #bfdbfe;
+}
+
+body.theme-dark .todo-header {
+  background: rgba(20, 28, 38, 0.72);
+  border-bottom-color: rgba(42, 59, 82, 0.8);
+}
+
+body.theme-dark .todo-header-table-host {
+  background: #0b1220;
+  border-color: rgba(42, 59, 82, 0.8);
+}
+
 body.theme-dark .todo-status-menu {
   background: #0f172a;
 }
@@ -3115,6 +3297,28 @@ body.theme-dark .todo-status.todo-da-schedulare {
   background: #4a3d16;
   color: #ffe9a3;
   border-color: #c9a84b;
+}
+
+.todo-focus-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 180;
+  background: rgba(16, 22, 32, 0.24);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+body.todo-menu-open .todo-table .todo-cell {
+  filter: blur(1.8px);
+  opacity: 0.5;
+  transition: filter 160ms ease, opacity 160ms ease;
+}
+
+body.todo-menu-open .todo-table .todo-cell.todo-cell-focus {
+  position: relative;
+  z-index: 210;
+  filter: none;
+  opacity: 1;
 }
 
 .report-cell {
@@ -3412,6 +3616,11 @@ body.theme-dark .report-panel .panel-header {
 }
 
 body.theme-dark .matrix-panel .panel-header {
+  background: rgba(20, 28, 38, 0.72);
+  border-bottom-color: rgba(42, 59, 82, 0.8);
+}
+
+body.theme-dark .todo-panel .panel-header {
   background: rgba(20, 28, 38, 0.72);
   border-bottom-color: rgba(42, 59, 82, 0.8);
 }
@@ -4366,6 +4575,23 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
   position: sticky;
   top: calc(var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
   z-index: 20;
+  background: rgba(255, 255, 255, 0.62);
+  padding-top: 2px;
+  padding-bottom: 4px;
+  box-shadow: none;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 0;
+  margin: -16px -16px 0 -16px;
+  padding-left: 16px;
+  padding-right: 16px;
+  border-bottom: 1px solid rgba(215, 219, 227, 0.7);
+}
+
+.todo-panel .panel-header {
+  position: sticky;
+  top: calc(var(--section-toolbar-h, 56px) + var(--section-toolbar-gap, 4px));
+  z-index: 17;
   background: rgba(255, 255, 255, 0.62);
   padding-top: 2px;
   padding-bottom: 4px;
