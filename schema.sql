@@ -23,6 +23,9 @@ begin
   if not exists (select 1 from pg_type where typname = 'attivita_stato') then
     create type attivita_stato as enum ('pianificata', 'in_corso', 'completata', 'annullata', 'non_necessaria');
   end if;
+  if not exists (select 1 from pg_type where typname = 'attivita_cliente_esito') then
+    create type attivita_cliente_esito as enum ('in_attesa', 'confermato', 'silenzio_assenso', 'respinto');
+  end if;
 end $$;
 
 -- Helper function for updated_at
@@ -184,6 +187,28 @@ create table if not exists commessa_attivita_override (
 
 create index if not exists idx_commessa_attivita_override_commessa on commessa_attivita_override (commessa_id);
 
+create table if not exists commessa_attivita_cliente (
+  commessa_id uuid not null references commesse(id) on delete cascade,
+  titolo text not null,
+  reparto text not null default '',
+  inviato_il date,
+  scadenza_il date,
+  esito attivita_cliente_esito not null default 'in_attesa',
+  confermato_il date,
+  updated_by uuid references utenti(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key (commessa_id, titolo, reparto),
+  constraint commessa_attivita_cliente_due_after_sent check (
+    scadenza_il is null or inviato_il is null or scadenza_il >= inviato_il
+  ),
+  constraint commessa_attivita_cliente_confirmed_date check (
+    esito::text <> 'confermato' or confermato_il is not null
+  )
+);
+
+create index if not exists idx_commessa_attivita_cliente_commessa on commessa_attivita_cliente (commessa_id);
+create index if not exists idx_commessa_attivita_cliente_esito on commessa_attivita_cliente (esito);
+
 -- Auth helpers (Supabase)
 -- Returns true if the current user's email is in whitelist_email and active.
 create or replace function is_whitelisted_email()
@@ -260,6 +285,21 @@ as $$
     from public.utenti u
     where u.id = auth.uid()
       and u.ruolo in ('admin', 'responsabile')
+  ) and is_whitelisted_email();
+$$;
+
+create or replace function can_manage_commessa_attivita_cliente()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, auth
+as $$
+  select exists (
+    select 1
+    from public.utenti u
+    where u.id = auth.uid()
+      and u.ruolo in ('admin', 'responsabile', 'planner')
   ) and is_whitelisted_email();
 $$;
 
@@ -532,6 +572,7 @@ alter table whitelist_email enable row level security;
 alter table log_commessa enable row level security;
 alter table attivita enable row level security;
 alter table commessa_attivita_override enable row level security;
+alter table commessa_attivita_cliente enable row level security;
 
 -- Policies: whitelisted users can read/write operational tables
 drop policy if exists commesse_select on commesse;
@@ -655,6 +696,19 @@ create policy commessa_attivita_override_update on commessa_attivita_override
   for update using (can_write()) with check (can_write());
 create policy commessa_attivita_override_delete on commessa_attivita_override
   for delete using (can_write());
+
+drop policy if exists commessa_attivita_cliente_select on commessa_attivita_cliente;
+create policy commessa_attivita_cliente_select on commessa_attivita_cliente
+  for select using (is_whitelisted_email());
+drop policy if exists commessa_attivita_cliente_insert on commessa_attivita_cliente;
+create policy commessa_attivita_cliente_insert on commessa_attivita_cliente
+  for insert with check (can_manage_commessa_attivita_cliente());
+drop policy if exists commessa_attivita_cliente_update on commessa_attivita_cliente;
+create policy commessa_attivita_cliente_update on commessa_attivita_cliente
+  for update using (can_manage_commessa_attivita_cliente()) with check (can_manage_commessa_attivita_cliente());
+drop policy if exists commessa_attivita_cliente_delete on commessa_attivita_cliente;
+create policy commessa_attivita_cliente_delete on commessa_attivita_cliente
+  for delete using (can_manage_commessa_attivita_cliente());
 
 -- Policies: whitelist management is admin-only (readable by whitelisted)
 drop policy if exists whitelist_select on whitelist_email;

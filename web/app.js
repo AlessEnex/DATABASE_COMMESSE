@@ -54,6 +54,10 @@ const state = {
   todoOverridesMap: new Map(),
   todoOverridesToken: 0,
   todoOverridesLoading: false,
+  todoClientFlowMap: new Map(),
+  todoClientFlowLoadedCommesse: new Set(),
+  todoClientFlowToken: 0,
+  todoClientFlowLoading: false,
   reportRangeStart: null,
   reportRangeDays: null,
   reportFilteredCommesse: null,
@@ -291,6 +295,7 @@ const calendarPanel = el("calendarPanel");
 const calendarTitle = el("calendarTitle");
 const reportPanel = el("reportPanel");
 const reportTitle = el("reportTitle");
+const todoTitle = el("todoTitle");
 const openNewCommessaBtn = el("openNewCommessaBtn");
 
 const detailForm = el("detailForm");
@@ -389,6 +394,16 @@ const todoPriorityField = el("todoPriorityField");
 const todoPriorityBtn = el("todoPriorityBtn");
 const todoSortBtn = el("todoSortBtn");
 const todoCompleteBtn = el("todoCompleteBtn");
+const todoInfoText = el("todoInfoText");
+const todoFilterControls = [
+  todoDescFilter,
+  todoNumberFilter,
+  todoYearFilter,
+  todoPriorityField,
+  todoPriorityBtn,
+  todoSortBtn,
+  todoCompleteBtn,
+].filter(Boolean);
 const sectionToolbar = el("sectionToolbar");
 const sectionLinks = Array.from(document.querySelectorAll(".section-link"));
 const MILESTONE_MIN_YEAR = 2024;
@@ -586,11 +601,27 @@ let todoLongPressStart = null;
 let todoLongPressSuppress = false;
 let todoFocusedRowKey = null;
 let todoMenuAnchorEl = null;
+let todoStatusMenuManualPosition = false;
+let todoStatusMenuDrag = null;
+let todoStatusMenuDragSuppressClickUntil = 0;
 let todoGlobalMenuTarget = null;
 let todoGlobalMenuAnchorEl = null;
 let todoGlobalMenuSuppress = false;
 let todoLastRendered = [];
 let todoScrollSyncLock = false;
+let todoFilterHeightLock = 0;
+let todoFilterUnlockTimer = null;
+const todoStatusDatePickerState = {
+  action: null,
+  sentMonth: startOfDay(new Date()),
+  sentSelected: null,
+  dueMonth: startOfDay(new Date()),
+  dueSelected: null,
+  confirmMonth: startOfDay(new Date()),
+  confirmSelected: null,
+};
+const TODO_VISUAL_REFRESH_MS = 30_000;
+let todoVisualRefreshTimer = null;
 let deleteCommessaId = null;
 let detailSnapshot = "";
 let detailDirty = false;
@@ -606,6 +637,8 @@ const BACKUP_TABLES = [
   { name: "commesse_reparti", conflict: "commessa_id,reparto_id" },
   { name: "assegnazioni", conflict: "commessa_id,utente_id" },
   { name: "attivita", conflict: "id" },
+  { name: "commessa_attivita_override", conflict: "commessa_id,titolo" },
+  { name: "commessa_attivita_cliente", conflict: "commessa_id,titolo,reparto" },
   { name: "whitelist_email", conflict: "email" },
   { name: "log_commessa", conflict: "id" },
 ];
@@ -1717,6 +1750,7 @@ async function syncSignedIn(session) {
     await loadMatrixAttivita();
     debugLog("syncSignedIn step: setupRealtime");
     await setupRealtime();
+    startTodoVisualRefreshLoop();
     debugLog("syncSignedIn complete");
   } catch (err) {
     debugLog(`syncSignedIn error: ${err?.message || err}`);
@@ -1728,9 +1762,14 @@ async function syncSignedIn(session) {
 
 function syncSignedOut() {
   debugLog("syncSignedOut");
+  stopTodoVisualRefreshLoop();
   state.session = null;
   state.profile = null;
   state.commesse = [];
+  state.reportActivitiesMap = new Map();
+  state.todoOverridesMap = new Map();
+  state.todoClientFlowMap = new Map();
+  state.todoClientFlowLoadedCommesse = new Set();
   authStatus.textContent = "Non autenticato";
   logoutBtn.classList.add("hidden");
   if (setPasswordBtn) setPasswordBtn.classList.add("hidden");
@@ -5028,6 +5067,7 @@ async function handleMatrixDropOnCell(cell, e) {
     setStatus("Activity moved.", "ok");
   }
   await loadMatrixAttivita();
+  await refreshTodoRealtimeSnapshot();
 }
 
 function getCommessaLabel(commessaId) {
@@ -5489,6 +5529,49 @@ function renderTodoYearFilter() {
   if (years.includes(Number(thisYear))) {
     todoYearFilter.value = thisYear;
   }
+}
+
+function isTodoFilterControlTarget(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  if (todoFilterControls.includes(target)) return true;
+  return Boolean(target.closest("#todoSection .todo-filters"));
+}
+
+function lockTodoGridHeightForFilters() {
+  if (!todoGrid) return;
+  const active = document.activeElement;
+  if (!isTodoFilterControlTarget(active)) return;
+  const height = Math.ceil(todoGrid.getBoundingClientRect().height);
+  if (!Number.isFinite(height) || height <= 0) return;
+  todoFilterHeightLock = Math.max(todoFilterHeightLock, height);
+  todoGrid.style.minHeight = `${todoFilterHeightLock}px`;
+}
+
+function releaseTodoGridHeightLock() {
+  if (!todoGrid) return;
+  const active = document.activeElement;
+  if (isTodoFilterControlTarget(active)) return;
+  todoFilterHeightLock = 0;
+  todoGrid.style.minHeight = "";
+}
+
+function scheduleTodoGridHeightUnlock() {
+  if (todoFilterUnlockTimer) clearTimeout(todoFilterUnlockTimer);
+  todoFilterUnlockTimer = setTimeout(() => {
+    todoFilterUnlockTimer = null;
+    releaseTodoGridHeightLock();
+  }, 0);
+}
+
+function renderMatrixReportFromTodoFilters() {
+  const prevX = window.scrollX;
+  const prevY = window.scrollY;
+  lockTodoGridHeightForFilters();
+  renderMatrixReport();
+  requestAnimationFrame(() => {
+    window.scrollTo(prevX, prevY);
+    scheduleTodoGridHeightUnlock();
+  });
 }
 
 function getTodoFilters() {
@@ -6375,6 +6458,7 @@ function renderMatrix() {
         }
         setStatus(rows.length > 1 ? "Activities assigned." : "Activity assigned.", "ok");
         await loadMatrixAttivita();
+        await refreshTodoRealtimeSnapshot();
       });
 
       row.appendChild(cell);
@@ -6451,7 +6535,10 @@ function renderMatrix() {
       bar.dataset.commessaId = b.a.commessa_id ? String(b.a.commessa_id) : "";
       bar.dataset.activityId = b.a.id ? String(b.a.id) : "";
       bar.dataset.risorsaId = b.a.risorsa_id ? String(b.a.risorsa_id) : "";
+      bar.dataset.attivita = b.a.titolo || "";
+      bar.dataset.reparto = getRisorsaDeptName(b.a.risorsa_id) || "";
       bar.classList.toggle("is-done", b.a.stato === "completata");
+      applyMatrixBarClientFlowClasses(bar, b.a, bar.dataset.reparto || "");
       if (matrixState.colorMode !== "none" && !isLavender) {
         const key =
           matrixState.colorMode === "activity"
@@ -6499,15 +6586,13 @@ function renderMatrix() {
         if (e.button !== 0) return;
         cancelCommessaHighlightTimer();
         closeMatrixQuickMenu();
-        const pressX = e.clientX;
-        const pressY = e.clientY;
         commessaHighlightTimer = setTimeout(() => {
           commessaHighlightTimer = null;
           if (matrixState.draggingId) return;
-          if (b.a.commessa_id) {
-            applyCommessaHighlight(String(b.a.commessa_id));
-          }
-          openMatrixQuickMenu(b.a, pressX, pressY);
+          closeTodoStatusMenu();
+          closeTodoGlobalStatusMenu();
+          clearCommessaHighlight();
+          openActivityModal(b.a);
           matrixState.suppressClickUntil = Date.now() + 600;
         }, 450);
       });
@@ -6541,7 +6626,12 @@ function renderMatrix() {
         }
         closeMatrixQuickMenu();
         clearCommessaHighlight();
-        openActivityModal(b.a);
+        if (!b.a.commessa_id || !b.a.titolo) {
+          openActivityModal(b.a);
+          return;
+        }
+        mergeReportActivitiesFromMatrix(b.a.commessa_id);
+        openTodoStatusMenu(bar, e.clientX, e.clientY);
       });
       const handle = document.createElement("span");
       handle.className = "matrix-resize-handle";
@@ -6619,6 +6709,7 @@ function renderMatrixReport() {
   matrixReportRange.textContent = `Oggi: ${formatDateLocal(today)}`;
 
   const filters = getReportFilters();
+  const todoCommesse = state.commesse.slice().sort(compareCommesseDesc);
   const useServerFilter = Boolean(filters.desc || filters.year || (filters.numVal != null && Number.isFinite(filters.numVal)));
   let commesse = [];
   if (useServerFilter) {
@@ -6640,7 +6731,7 @@ function renderMatrixReport() {
 
   if (!commesse.length) {
     matrixReportGrid.innerHTML = `<div class="matrix-empty">Nessuna commessa trovata.</div>`;
-    renderTodoSection(commesse);
+    renderTodoSection(todoCommesse);
     return;
   }
 
@@ -6648,7 +6739,7 @@ function renderMatrixReport() {
     matrixReportGrid.innerHTML =
       `<div class="matrix-empty">Troppe commesse (${commesse.length}). ` +
       `Applica un filtro per visualizzare la reportistica.</div>`;
-    renderTodoSection(commesse);
+    renderTodoSection(todoCommesse);
     return;
   }
 
@@ -6661,7 +6752,25 @@ function renderMatrixReport() {
   if (missingOverrides && !state.todoOverridesLoading) {
     loadTodoOverridesFor(commesse);
   }
-  renderTodoSection(commesse);
+  const missingClientFlows = commesse.some((c) => !state.todoClientFlowLoadedCommesse.has(String(c.id)));
+  if (missingClientFlows && !state.todoClientFlowLoading) {
+    loadTodoClientFlowsFor(commesse);
+  }
+  if (todoCommesse.length && todoCommesse.length <= REPORT_MAX_ITEMS) {
+    const todoMissingSchedules = todoCommesse.some((c) => !state.reportActivitiesMap.has(String(c.id)));
+    if (todoMissingSchedules && !state.reportActivitiesLoading) {
+      loadReportActivitiesFor(todoCommesse);
+    }
+    const todoMissingOverrides = todoCommesse.some((c) => !state.todoOverridesMap.has(String(c.id)));
+    if (todoMissingOverrides && !state.todoOverridesLoading) {
+      loadTodoOverridesFor(todoCommesse);
+    }
+    const todoMissingClientFlows = todoCommesse.some((c) => !state.todoClientFlowLoadedCommesse.has(String(c.id)));
+    if (todoMissingClientFlows && !state.todoClientFlowLoading) {
+      loadTodoClientFlowsFor(todoCommesse);
+    }
+  }
+  renderTodoSection(todoCommesse);
   if (state.reportView === "gantt") {
     renderReportGantt(commesse, today);
     return;
@@ -6884,14 +6993,12 @@ async function loadReportActivitiesFor(commesse) {
     return;
   }
   if (commesse.length > REPORT_MAX_ITEMS) {
-    state.reportActivitiesMap = new Map();
     return;
   }
   const token = ++state.reportActivitiesToken;
   state.reportActivitiesLoading = true;
   const ids = Array.from(new Set(commesse.map((c) => c.id))).filter(Boolean);
   if (!ids.length) {
-    state.reportActivitiesMap = new Map();
     state.reportActivitiesLoading = false;
     return;
   }
@@ -6967,7 +7074,11 @@ async function loadReportActivitiesFor(commesse) {
   });
 
   if (token !== state.reportActivitiesToken) return;
-  state.reportActivitiesMap = map;
+  const merged = new Map(state.reportActivitiesMap);
+  map.forEach((value, key) => {
+    merged.set(String(key), value);
+  });
+  state.reportActivitiesMap = merged;
   state.reportActivitiesLoading = false;
   renderMatrixReport();
 }
@@ -6978,14 +7089,12 @@ async function loadTodoOverridesFor(commesse) {
     return;
   }
   if (commesse.length > REPORT_MAX_ITEMS) {
-    state.todoOverridesMap = new Map();
     return;
   }
   const token = ++state.todoOverridesToken;
   state.todoOverridesLoading = true;
   const ids = Array.from(new Set(commesse.map((c) => c.id))).filter(Boolean);
   if (!ids.length) {
-    state.todoOverridesMap = new Map();
     state.todoOverridesLoading = false;
     return;
   }
@@ -7030,8 +7139,86 @@ async function loadTodoOverridesFor(commesse) {
     list.set(normalizePhaseKey(row.titolo), row.stato || "non_necessaria");
     map.set(key, list);
   });
-  state.todoOverridesMap = map;
+  const merged = new Map(state.todoOverridesMap);
+  map.forEach((value, key) => {
+    merged.set(String(key), value);
+  });
+  state.todoOverridesMap = merged;
   state.todoOverridesLoading = false;
+  renderTodoSection(todoLastRendered);
+}
+
+async function loadTodoClientFlowsFor(commesse) {
+  if (!commesse || !commesse.length) {
+    state.todoClientFlowMap = new Map();
+    state.todoClientFlowLoadedCommesse = new Set();
+    return;
+  }
+  if (commesse.length > REPORT_MAX_ITEMS) {
+    return;
+  }
+  const token = ++state.todoClientFlowToken;
+  state.todoClientFlowLoading = true;
+  const ids = Array.from(new Set(commesse.map((c) => c.id))).filter(Boolean);
+  if (!ids.length) {
+    state.todoClientFlowLoading = false;
+    return;
+  }
+
+  let rows = null;
+  let error = null;
+  if (!PREFER_REST_ON_RELOAD) {
+    try {
+      const result = await withTimeout(
+        supabase
+          .from("commessa_attivita_cliente")
+          .select("commessa_id,titolo,reparto,inviato_il,scadenza_il,esito,confermato_il,updated_at")
+          .in("commessa_id", ids),
+        FETCH_TIMEOUT_MS
+      );
+      rows = result.data;
+      error = result.error;
+    } catch (err) {
+      debugLog(`loadTodoClientFlows timeout: ${err?.message || err}`);
+    }
+  }
+
+  if (!rows || error) {
+    debugLog("loadTodoClientFlows fallback REST");
+    const inList = ids.join(",");
+    rows = await fetchTableViaRest(
+      "commessa_attivita_cliente",
+      `select=commessa_id,titolo,reparto,inviato_il,scadenza_il,esito,confermato_il,updated_at&commessa_id=in.(${inList})`
+    );
+  }
+
+  if (!rows || token !== state.todoClientFlowToken) {
+    if (token === state.todoClientFlowToken) {
+      const loaded = new Set(state.todoClientFlowLoadedCommesse || []);
+      ids.forEach((id) => loaded.add(String(id)));
+      state.todoClientFlowLoadedCommesse = loaded;
+      state.todoClientFlowLoading = false;
+    }
+    return;
+  }
+
+  const idSet = new Set(ids.map((id) => String(id)));
+  const merged = new Map(state.todoClientFlowMap);
+  Array.from(merged.keys()).forEach((key) => {
+    const commessaKey = String(key).split("|")[0];
+    if (idSet.has(commessaKey)) merged.delete(key);
+  });
+  rows.forEach((row) => {
+    const normalized = normalizeTodoClientFlowRow(row);
+    if (!normalized) return;
+    const key = buildTodoClientFlowKey(normalized.commessaId, normalized.titolo, normalized.reparto);
+    merged.set(key, normalized);
+  });
+  state.todoClientFlowMap = merged;
+  const loaded = new Set(state.todoClientFlowLoadedCommesse || []);
+  ids.forEach((id) => loaded.add(String(id)));
+  state.todoClientFlowLoadedCommesse = loaded;
+  state.todoClientFlowLoading = false;
   renderTodoSection(todoLastRendered);
 }
 
@@ -7040,6 +7227,195 @@ function getTodoOverrideStatus(commessaId, title) {
   const list = state.todoOverridesMap.get(key);
   if (!list) return null;
   return list.get(normalizePhaseKey(title)) || null;
+}
+
+const TODO_CLIENT_FLOW_DEFAULT_DEADLINE_BUSINESS_DAYS = 5;
+const TODO_CLIENT_FLOW_OUTCOME = {
+  IN_ATTESA: "in_attesa",
+  CONFERMATO: "confermato",
+  SILENZIO_ASSENSO: "silenzio_assenso",
+  RESPINTO: "respinto",
+};
+
+function buildTodoClientFlowKey(commessaId, titolo, repartoName = "") {
+  return `${String(commessaId || "")}|${normalizePhaseKey(titolo || "")}|${normalizeDeptKey(repartoName || "")}`;
+}
+
+const TODO_CLIENT_FLOW_TRACKED_TITLES = new Set(["preliminare", "3d"]);
+
+function isTodoClientFlowTracked(titolo, repartoName = "") {
+  const titleKey = normalizePhaseKey(titolo || "");
+  const deptKey = normalizeDeptKey(repartoName || "");
+  return TODO_CLIENT_FLOW_TRACKED_TITLES.has(titleKey) && deptKey.includes("CAD");
+}
+
+function getTodoClientFlowSectionTitle(titolo = "") {
+  const cleanTitle = String(titolo || "").trim();
+  return cleanTitle ? `Cliente ${cleanTitle}` : "Cliente";
+}
+
+function parseIsoDateOnly(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return startOfDay(d);
+  }
+  const text = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const parsed = new Date(`${text}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return startOfDay(parsed);
+}
+
+function formatIsoDateOnly(value) {
+  const d = parseIsoDateOnly(value);
+  if (!d) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getTodoClientFlow(commessaId, titolo, repartoName = "") {
+  const key = buildTodoClientFlowKey(commessaId, titolo, repartoName);
+  return state.todoClientFlowMap.get(key) || null;
+}
+
+function normalizeTodoClientFlowRow(row) {
+  if (!row?.commessa_id || !row?.titolo) return null;
+  const reparto = row.reparto || "";
+  const sentAt = parseIsoDateOnly(row.inviato_il);
+  const dueAt = parseIsoDateOnly(row.scadenza_il);
+  const confirmedAt = parseIsoDateOnly(row.confermato_il);
+  const outcome = normalizePhaseKey(row.esito || "") || TODO_CLIENT_FLOW_OUTCOME.IN_ATTESA;
+  return {
+    commessaId: row.commessa_id,
+    titolo: row.titolo,
+    reparto,
+    sentAt,
+    dueAt,
+    confirmedAt,
+    outcome,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+function getTodoClientFlowResolvedStatus(flow, referenceDate = startOfDay(new Date())) {
+  if (!flow || !flow.sentAt) return "non_inviato";
+  if (flow.outcome === TODO_CLIENT_FLOW_OUTCOME.CONFERMATO) return "confermato";
+  if (flow.outcome === TODO_CLIENT_FLOW_OUTCOME.SILENZIO_ASSENSO) return "silenzio_assenso";
+  if (flow.outcome === TODO_CLIENT_FLOW_OUTCOME.RESPINTO) return "respinto";
+  if (flow.dueAt && businessDayDiff(startOfDay(referenceDate), startOfDay(flow.dueAt)) < 0) return "scaduto";
+  return "in_attesa";
+}
+
+function getTodoClientFlowAgingDays(flow, referenceDate = startOfDay(new Date())) {
+  if (!flow?.sentAt) return null;
+  return Math.max(0, dayNumberUTC(referenceDate) - dayNumberUTC(flow.sentAt));
+}
+
+function getTodoClientFlowRemainingDays(flow, referenceDate = startOfDay(new Date())) {
+  if (!flow?.dueAt) return null;
+  return businessDayDiff(startOfDay(referenceDate), startOfDay(flow.dueAt));
+}
+
+function getTodoClientFlowMeta(flow, referenceDate = startOfDay(new Date())) {
+  if (!flow || !flow.sentAt) return null;
+  const status = getTodoClientFlowResolvedStatus(flow, referenceDate);
+  const waitDays = getTodoClientFlowAgingDays(flow, referenceDate);
+  const remainingDays = getTodoClientFlowRemainingDays(flow, referenceDate);
+  const sentLabel = formatDateDMY(flow.sentAt);
+  if (status === "confermato") {
+    const confLabel = flow.confirmedAt ? formatDateDMY(flow.confirmedAt) : "data n/d";
+    return { text: `Confermato ${confLabel} · Inviato ${sentLabel}`, tone: "ok" };
+  }
+  if (status === "silenzio_assenso") {
+    const decisionLabel = flow.confirmedAt ? formatDateDMY(flow.confirmedAt) : flow.dueAt ? formatDateDMY(flow.dueAt) : "data n/d";
+    return { text: `Silenzio assenso ${decisionLabel} · Inviato ${sentLabel}`, tone: "warn" };
+  }
+  if (status === "respinto") {
+    return { text: `Inviato ${sentLabel} · Respinto`, tone: "danger" };
+  }
+  if (status === "scaduto") {
+    const overdueDays = remainingDays != null ? Math.max(0, -remainingDays) : null;
+    return {
+      text: `Inviato ${sentLabel} · Scaduto${overdueDays != null ? ` da ${overdueDays}g` : ""}`,
+      tone: "danger",
+    };
+  }
+  const dueLabel = flow.dueAt ? formatDateDMY(flow.dueAt) : "scadenza n/d";
+  if (remainingDays === 0) {
+    return { text: `Inviato ${sentLabel} · Restano 0g · Scad. ${dueLabel}`, tone: "warn" };
+  }
+  if (remainingDays != null && remainingDays > 0) {
+    return { text: `Inviato ${sentLabel} · Restano ${remainingDays}g · Scad. ${dueLabel}`, tone: "" };
+  }
+  return { text: `Inviato ${sentLabel} · In attesa ${waitDays}g · Scad. ${dueLabel}`, tone: "" };
+}
+
+function applyMatrixBarClientFlowClasses(bar, activity, repartoName = "") {
+  if (!bar) return;
+  bar.classList.remove("is-client-sent", "is-client-final");
+  if (!activity) return;
+  const commessaId = activity.commessa_id ?? activity.commessaId ?? "";
+  const titolo = activity.titolo || "";
+  const statoRaw = activity.stato || (bar.classList.contains("is-done") ? "completata" : "");
+  if (!commessaId || normalizePhaseKey(statoRaw) !== "completata") return;
+  const reparto =
+    repartoName ||
+    activity.reparto ||
+    (activity.risorsa_id != null ? getRisorsaDeptName(activity.risorsa_id) : "") ||
+    "";
+  if (!isTodoClientFlowTracked(titolo, reparto)) return;
+  const flow = getTodoClientFlow(commessaId, titolo, reparto);
+  if (!flow?.sentAt) return;
+  const resolved = getTodoClientFlowResolvedStatus(flow, startOfDay(new Date()));
+  if (resolved === "confermato" || resolved === "silenzio_assenso") {
+    bar.classList.add("is-client-final");
+    return;
+  }
+  bar.classList.add("is-client-sent");
+}
+
+function refreshMatrixClientFlowIndicatorsForTarget(target) {
+  if (!matrixGrid || !target?.commessaId || !target?.titolo) return;
+  const commessaKey = String(target.commessaId);
+  const titleKey = normalizePhaseKey(target.titolo || "");
+  const deptKey = normalizeDeptKey(target.reparto || "");
+  const byId = new Map((matrixState.attivita || []).map((entry) => [String(entry.id), entry]));
+  matrixGrid.querySelectorAll(".matrix-activity-bar[data-activity-id]").forEach((bar) => {
+    if (String(bar.dataset.commessaId || "") !== commessaKey) return;
+    if (normalizePhaseKey(bar.dataset.attivita || "") !== titleKey) return;
+    if (deptKey && normalizeDeptKey(bar.dataset.reparto || "") !== deptKey) return;
+    const entry = byId.get(String(bar.dataset.activityId || ""));
+    const activity = entry || {
+      commessa_id: commessaKey,
+      titolo: target.titolo,
+      stato: bar.classList.contains("is-done") ? "completata" : "pianificata",
+      reparto: target.reparto || "",
+    };
+    applyMatrixBarClientFlowClasses(bar, activity, target.reparto || "");
+  });
+}
+
+function getTodoClientFlowEditBlockReason(titolo, repartoName = "") {
+  if (!isTodoClientFlowTracked(titolo, repartoName)) return "Tracking cliente non disponibile per questa attivita.";
+  if (!state.canWrite) return "Permessi insufficienti.";
+  const role = getTodoRole();
+  if (role === "admin" || role === "planner") return "";
+  if (role !== "responsabile") return "Solo admin, responsabile e planner possono modificare il tracking cliente.";
+  const userDept = getProfileDeptKey();
+  const targetDept = normalizeDeptKey(repartoName || "");
+  if (!userDept || !targetDept || userDept !== targetDept) {
+    return "Responsabile: puoi modificare solo il tracking del tuo reparto.";
+  }
+  return "";
+}
+
+function getDefaultClientFlowDueDate(sentAt) {
+  if (!sentAt) return null;
+  return addBusinessDays(sentAt, TODO_CLIENT_FLOW_DEFAULT_DEADLINE_BUSINESS_DAYS);
 }
 
 function getTodoRole() {
@@ -7062,6 +7438,52 @@ function getTodoEntriesForCell(commessaId, title, repartoName = "") {
     if (!deptKey) return true;
     return normalizeDeptKey(entry.dept || "") === deptKey;
   });
+}
+
+function mergeReportActivitiesFromMatrix(commessaId) {
+  if (!commessaId) return;
+  const key = String(commessaId);
+  const existing = state.reportActivitiesMap.get(key) || [];
+  const byId = new Map();
+  existing.forEach((entry) => {
+    const idKey = entry?.id != null ? String(entry.id) : `${entry?.titolo || ""}|${entry?.risorsaId || ""}|${entry?.start || ""}`;
+    byId.set(idKey, entry);
+  });
+  const risorseById = new Map((state.risorse || []).map((r) => [String(r.id), r.nome]));
+  (matrixState.attivita || [])
+    .filter((row) => String(row.commessa_id || "") === key)
+    .forEach((row) => {
+      const idKey = row?.id != null ? String(row.id) : `${row?.titolo || ""}|${row?.risorsa_id || ""}|${row?.data_inizio || ""}`;
+      const dept =
+        row.risorsa_id != null
+          ? getDeptBucketByRisorsa(row.risorsa_id)
+          : row.reparto_id != null
+          ? getDeptBucketByRepartoId(row.reparto_id)
+          : "ALTRO";
+      byId.set(idKey, {
+        id: row.id,
+        risorsaId: row.risorsa_id,
+        assegnatoA: row.assegnato_a || null,
+        titolo: row.titolo || "Attivita",
+        risorsa:
+          row.risorsa_id != null
+            ? risorseById.get(String(row.risorsa_id)) || `Risorsa ${row.risorsa_id}`
+            : "Risorsa n/d",
+        dept,
+        start: row.data_inizio ? new Date(row.data_inizio) : null,
+        end: row.data_fine ? new Date(row.data_fine) : null,
+        stato: row.stato || "pianificata",
+      });
+    });
+  const mergedList = Array.from(byId.values()).sort((a, b) => {
+    const aTime = a.start ? a.start.getTime() : 0;
+    const bTime = b.start ? b.start.getTime() : 0;
+    if (aTime !== bTime) return aTime - bTime;
+    return String(a.titolo || "").localeCompare(String(b.titolo || ""));
+  });
+  const mergedMap = new Map(state.reportActivitiesMap);
+  mergedMap.set(key, mergedList);
+  state.reportActivitiesMap = mergedMap;
 }
 
 function getTodoEditableEntries(entries, repartoName = "") {
@@ -7124,6 +7546,69 @@ function getTodoStatusFor(commessaId, title, repartoName = "") {
   return "schedulata";
 }
 
+function getTodoStatusVisual(status) {
+  if (status === "fatta") return { label: "DONE", cls: "todo-fatta" };
+  if (status === "schedulata") return { label: "PLANNED", cls: "todo-schedulata" };
+  if (status === "non_necessaria") return { label: "NOT NEED", cls: "todo-non-necessaria" };
+  return { label: "TO PLAN", cls: "todo-da-schedulare" };
+}
+
+function findTodoCellByTarget(commessaId, titolo, repartoName = "") {
+  if (!todoGrid || !commessaId || !titolo) return null;
+  const titleKey = normalizePhaseKey(titolo);
+  const deptKey = normalizeDeptKey(repartoName || "");
+  const candidates = Array.from(todoGrid.querySelectorAll(`.todo-cell[data-commessa-id="${String(commessaId)}"]`));
+  return (
+    candidates.find((cell) => {
+      const cellTitleKey = normalizePhaseKey(cell.dataset.attivita || "");
+      const cellDeptKey = normalizeDeptKey(cell.dataset.reparto || "");
+      return cellTitleKey === titleKey && cellDeptKey === deptKey;
+    }) || null
+  );
+}
+
+function refreshTodoCellVisualFromState(target) {
+  if (!target) return;
+  const { commessaId, titolo, reparto } = target;
+  const cell = findTodoCellByTarget(commessaId, titolo, reparto || "");
+  if (!cell) return;
+
+  const status = getTodoStatusFor(commessaId, titolo, reparto || "");
+  const statusVisual = getTodoStatusVisual(status);
+  const statusPill = cell.querySelector(".todo-status");
+  if (statusPill) {
+    statusPill.textContent = statusVisual.label;
+    statusPill.classList.remove("todo-fatta", "todo-schedulata", "todo-non-necessaria", "todo-da-schedulare");
+    statusPill.classList.add(statusVisual.cls);
+  }
+
+  if (isTodoClientFlowTracked(titolo, reparto || "")) {
+    const clientFlow = getTodoClientFlow(commessaId, titolo, reparto || "");
+    const clientMeta = getTodoClientFlowMeta(clientFlow, startOfDay(new Date()));
+    let metaEl = cell.querySelector(".todo-client-meta");
+    if (clientMeta) {
+      if (!metaEl) {
+        const wrap = cell.querySelector(".todo-status-wrap");
+        if (wrap) {
+          metaEl = document.createElement("span");
+          metaEl.className = "todo-client-meta";
+          wrap.appendChild(metaEl);
+        }
+      }
+      if (metaEl) {
+        metaEl.textContent = clientMeta.text;
+        metaEl.title = clientMeta.text;
+        metaEl.classList.remove("todo-client-meta-ok", "todo-client-meta-warn", "todo-client-meta-danger");
+        if (clientMeta.tone === "ok") metaEl.classList.add("todo-client-meta-ok");
+        if (clientMeta.tone === "warn") metaEl.classList.add("todo-client-meta-warn");
+        if (clientMeta.tone === "danger") metaEl.classList.add("todo-client-meta-danger");
+      }
+    } else if (metaEl) {
+      metaEl.remove();
+    }
+  }
+}
+
 const TODO_GLOBAL_STATUS_ORDER = ["In corso", "Rilasciata a prod.", "Evasa"];
 const TODO_GLOBAL_STATUS_TO_DB = {
   "In corso": "in_corso",
@@ -7169,6 +7654,43 @@ function updateTodoPanelHeaderOffset() {
   }
 }
 
+function updateTodoInfoBar(commesse, columns) {
+  if (!todoInfoText) return;
+  const base = "Click o long press su una pill per cambiare stato.";
+  if (!Array.isArray(commesse) || !commesse.length || !Array.isArray(columns) || !columns.length) {
+    todoInfoText.textContent = base;
+    return;
+  }
+  const trackedColumns = columns.filter((col) => isTodoClientFlowTracked(col.titolo, col.reparto));
+  if (!trackedColumns.length) {
+    todoInfoText.textContent = base;
+    return;
+  }
+  const seen = new Set();
+  let waitingCount = 0;
+  let expiredCount = 0;
+  let confirmedCount = 0;
+  const today = startOfDay(new Date());
+  commesse.forEach((commessa) => {
+    trackedColumns.forEach((col) => {
+      const key = `${commessa.id}|${normalizePhaseKey(col.titolo)}|${normalizeDeptKey(col.reparto)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const activityStatus = getTodoStatusFor(commessa.id, col.titolo, col.reparto);
+      if (activityStatus !== "fatta") return;
+      const flow = getTodoClientFlow(commessa.id, col.titolo, col.reparto);
+      const status = getTodoClientFlowResolvedStatus(flow, today);
+      if (status === "in_attesa") waitingCount += 1;
+      else if (status === "scaduto") expiredCount += 1;
+      else if (status === "confermato") confirmedCount += 1;
+    });
+  });
+  todoInfoText.textContent =
+    `${base} · Preliminare/3D CAD in attesa: ${waitingCount}` +
+    ` · Scaduti: ${expiredCount}` +
+    ` · Confermati: ${confirmedCount}`;
+}
+
 async function updateTodoGlobalStatus(commessa, statusLabel) {
   if (!commessa?.id) return false;
   if (!canEditTodoGlobalStatus()) {
@@ -7196,39 +7718,60 @@ function renderTodoSection(commesse) {
   todoLastRendered = commesse || [];
   updateTodoPanelHeaderOffset();
   if (!state.session) {
+    updateTodoInfoBar([], []);
     if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Accedi per vedere i To Dos.</div>`;
     return;
   }
   if (!commesse || !commesse.length) {
+    updateTodoInfoBar([], []);
     if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Nessuna commessa.</div>`;
-    return;
-  }
-  if (commesse.length > REPORT_MAX_ITEMS) {
-    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
-    todoGrid.innerHTML = `<div class="report-empty">Troppe commesse (${commesse.length}).</div>`;
     return;
   }
 
   const groups = getTodoActivityGroups();
   if (!groups.length) {
+    updateTodoInfoBar([], []);
     if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Nessuna attivita disponibile.</div>`;
     return;
   }
   const targetPhaseKey = "progettazione termodinamica";
+  const cadOrderKeys = [
+    "preliminare",
+    "3d",
+    "carenatura",
+    "telaio",
+    "costruttivi 1-5",
+    "consegna totale",
+  ];
+  const orderActivitiesForGroup = (group) => {
+    const deptKey = normalizeDeptKey(group?.reparto || "");
+    const list = (group?.attivita || []).slice();
+    if (deptKey.includes("CAD")) {
+      return list.sort((a, b) => {
+        const aKey = normalizePhaseKey(a);
+        const bKey = normalizePhaseKey(b);
+        const aIdx = cadOrderKeys.indexOf(aKey);
+        const bIdx = cadOrderKeys.indexOf(bKey);
+        const aRank = aIdx >= 0 ? aIdx : Number.MAX_SAFE_INTEGER;
+        const bRank = bIdx >= 0 ? bIdx : Number.MAX_SAFE_INTEGER;
+        if (aRank !== bRank) return aRank - bRank;
+        return String(a || "").localeCompare(String(b || ""));
+      });
+    }
+    return list.sort((a, b) => {
+      const aTarget = normalizePhaseKey(a) === targetPhaseKey ? 0 : 1;
+      const bTarget = normalizePhaseKey(b) === targetPhaseKey ? 0 : 1;
+      if (aTarget !== bTarget) return aTarget - bTarget;
+      return String(a || "").localeCompare(String(b || ""));
+    });
+  };
   const orderedGroups = groups
     .map((group) => ({
       ...group,
-      attivita: (group.attivita || [])
-        .slice()
-        .sort((a, b) => {
-          const aTarget = normalizePhaseKey(a) === targetPhaseKey ? 0 : 1;
-          const bTarget = normalizePhaseKey(b) === targetPhaseKey ? 0 : 1;
-          if (aTarget !== bTarget) return aTarget - bTarget;
-          return String(a || "").localeCompare(String(b || ""));
-        }),
+      attivita: orderActivitiesForGroup(group),
     }))
     .sort((a, b) => {
       const aHas = (a.attivita || []).some((name) => normalizePhaseKey(name) === targetPhaseKey);
@@ -7236,18 +7779,6 @@ function renderTodoSection(commesse) {
       if (aHas !== bHas) return aHas ? -1 : 1;
       return String(a.reparto || "").localeCompare(String(b.reparto || ""));
     });
-
-  const missingData =
-    state.reportActivitiesLoading ||
-    state.todoOverridesLoading ||
-    commesse.some(
-      (c) => !state.reportActivitiesMap.has(String(c.id)) || !state.todoOverridesMap.has(String(c.id))
-    );
-  if (missingData) {
-    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
-    todoGrid.innerHTML = `<div class="report-empty">Caricamento To Dos...</div>`;
-    return;
-  }
 
   const columns = [];
   orderedGroups.forEach((g) => {
@@ -7257,9 +7788,31 @@ function renderTodoSection(commesse) {
   });
   const filteredCommesse = applyTodoFilters(commesse, columns);
   if (!filteredCommesse.length) {
+    updateTodoInfoBar([], columns);
     if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
     todoGrid.innerHTML = `<div class="report-empty">Nessuna commessa trovata con i filtri To Dos.</div>`;
     return;
+  }
+  if (filteredCommesse.length > REPORT_MAX_ITEMS) {
+    updateTodoInfoBar([], columns);
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
+    todoGrid.innerHTML = `<div class="report-empty">Troppe commesse (${filteredCommesse.length}). Affina i filtri To Dos.</div>`;
+    return;
+  }
+  const missingData = filteredCommesse.some(
+    (c) => !state.reportActivitiesMap.has(String(c.id)) || !state.todoOverridesMap.has(String(c.id))
+  );
+  if (missingData) {
+    updateTodoInfoBar([], columns);
+    if (!state.reportActivitiesLoading) loadReportActivitiesFor(filteredCommesse);
+    if (!state.todoOverridesLoading) loadTodoOverridesFor(filteredCommesse);
+    if (todoHeaderTableHost) todoHeaderTableHost.innerHTML = "";
+    todoGrid.innerHTML = `<div class="report-empty">Caricamento To Dos...</div>`;
+    return;
+  }
+  const missingClientFlows = filteredCommesse.some((c) => !state.todoClientFlowLoadedCommesse.has(String(c.id)));
+  if (missingClientFlows && !state.todoClientFlowLoading) {
+    loadTodoClientFlowsFor(filteredCommesse);
   }
 
   const gridCols = `240px 160px repeat(${columns.length}, minmax(120px, 1fr))`;
@@ -7269,6 +7822,7 @@ function renderTodoSection(commesse) {
   const bodyTable = document.createElement("div");
   bodyTable.className = "todo-table todo-table-body";
   bodyTable.style.gridTemplateColumns = gridCols;
+  const today = startOfDay(new Date());
 
   const headerBlank = document.createElement("div");
   headerBlank.className = "todo-cell todo-head";
@@ -7360,6 +7914,9 @@ function renderTodoSection(commesse) {
     colStart = 3;
     columns.forEach((col) => {
       const status = getTodoStatusFor(commessa.id, col.titolo, col.reparto);
+      const isTrackedFlow = isTodoClientFlowTracked(col.titolo, col.reparto);
+      const clientFlow = isTrackedFlow ? getTodoClientFlow(commessa.id, col.titolo, col.reparto) : null;
+      const clientMeta = isTrackedFlow && status === "fatta" ? getTodoClientFlowMeta(clientFlow, today) : null;
       const cell = document.createElement("div");
       cell.className = "todo-cell";
       cell.style.gridRow = String(rowIndex);
@@ -7370,7 +7927,7 @@ function renderTodoSection(commesse) {
           : status === "schedulata"
           ? "PLANNED"
           : status === "non_necessaria"
-          ? "Non necessaria"
+          ? "NOT NEED"
           : "TO PLAN";
       const statusClass =
         status === "fatta"
@@ -7380,7 +7937,20 @@ function renderTodoSection(commesse) {
           : status === "non_necessaria"
           ? "todo-non-necessaria"
           : "todo-da-schedulare";
-      cell.innerHTML = `<span class="todo-status ${statusClass}">${statusLabel}</span>`;
+      const metaToneClass =
+        clientMeta?.tone === "ok"
+          ? "todo-client-meta-ok"
+          : clientMeta?.tone === "danger"
+          ? "todo-client-meta-danger"
+          : clientMeta?.tone === "warn"
+          ? "todo-client-meta-warn"
+          : "";
+      cell.innerHTML = `
+        <div class="todo-status-wrap">
+          <span class="todo-status ${statusClass}">${statusLabel}</span>
+          ${clientMeta ? `<span class="todo-client-meta ${metaToneClass}" title="${escapeHtml(clientMeta.text)}">${escapeHtml(clientMeta.text)}</span>` : ""}
+        </div>
+      `;
       cell.dataset.commessaId = commessa.id;
       cell.dataset.attivita = col.titolo;
       cell.dataset.reparto = col.reparto || "";
@@ -7431,11 +8001,291 @@ function renderTodoSection(commesse) {
   if (todoHeaderTableHost) {
     todoHeaderTableHost.innerHTML = "";
     todoHeaderTableHost.appendChild(headerTable);
+    todoHeaderTableHost.scrollLeft = todoGrid.scrollLeft;
   } else {
     todoGrid.appendChild(headerTable);
   }
   todoGrid.appendChild(bodyTable);
+  updateTodoInfoBar(filteredCommesse, columns);
   updateTodoPanelHeaderOffset();
+}
+
+function refreshTodoVisualizationNow() {
+  if (!state.session) return;
+  if (!todoSection || todoSection.classList.contains("collapsed")) return;
+  const base =
+    todoLastRendered && todoLastRendered.length ? todoLastRendered : (state.commesse || []).slice().sort(compareCommesseDesc);
+  renderTodoSection(base);
+  if (todoStatusDatePickerState.action === "client_sent" && isTodoMenuOpen(todoStatusMenu)) {
+    renderTodoStatusDatePicker();
+    repositionTodoStatusMenuToAnchor();
+  }
+}
+
+function stopTodoVisualRefreshLoop() {
+  if (!todoVisualRefreshTimer) return;
+  clearInterval(todoVisualRefreshTimer);
+  todoVisualRefreshTimer = null;
+}
+
+function startTodoVisualRefreshLoop() {
+  stopTodoVisualRefreshLoop();
+  todoVisualRefreshTimer = setInterval(() => {
+    if (document.hidden) return;
+    refreshTodoVisualizationNow();
+  }, TODO_VISUAL_REFRESH_MS);
+}
+
+function resetTodoStatusDatePickerState() {
+  todoStatusDatePickerState.action = null;
+  todoStatusDatePickerState.sentSelected = null;
+  todoStatusDatePickerState.dueSelected = null;
+  todoStatusDatePickerState.confirmSelected = null;
+  const now = startOfDay(new Date());
+  todoStatusDatePickerState.sentMonth = now;
+  todoStatusDatePickerState.dueMonth = now;
+  todoStatusDatePickerState.confirmMonth = now;
+}
+
+function closeTodoStatusDatePicker() {
+  if (!todoStatusMenu) return;
+  const panel = todoStatusMenu.querySelector(".todo-status-date-panel");
+  if (panel) panel.classList.add("hidden");
+  resetTodoStatusDatePickerState();
+}
+
+function renderTodoStatusDatePicker() {
+  if (!todoStatusMenu) return;
+  const panel = todoStatusMenu.querySelector(".todo-status-date-panel");
+  if (!panel) return;
+  const title = panel.querySelector(".todo-status-date-title");
+  const applyBtn = panel.querySelector('button[data-action="todo_date_apply"]');
+  const dualWrap = panel.querySelector(".todo-status-date-dual");
+  const confirmWrap = panel.querySelector(".todo-status-date-confirm");
+  if (!title || !dualWrap || !confirmWrap) return;
+
+  const renderCalendar = (field, monthInput, selectedInput) => {
+    const root = panel.querySelector(`.todo-status-date-calendar[data-field="${field}"]`);
+    if (!root) return;
+    const label = root.querySelector(".todo-status-date-label");
+    const daysHost = root.querySelector(".todo-status-date-days");
+    if (!label || !daysHost) return;
+    const selected = selectedInput ? startOfDay(selectedInput) : startOfDay(new Date());
+    const month = monthInput ? new Date(monthInput.getFullYear(), monthInput.getMonth(), 1) : new Date(selected.getFullYear(), selected.getMonth(), 1);
+    label.textContent = month.toLocaleDateString("it-IT", { month: "long", year: "numeric" });
+    daysHost.innerHTML = "";
+    const firstWeekday = (month.getDay() + 6) % 7;
+    for (let i = 0; i < firstWeekday; i += 1) {
+      const empty = document.createElement("button");
+      empty.type = "button";
+      empty.className = "milestone-day empty";
+      empty.disabled = true;
+      empty.setAttribute("aria-hidden", "true");
+      daysHost.appendChild(empty);
+    }
+    const today = startOfDay(new Date());
+    const cursor = new Date(month);
+    while (cursor.getMonth() === month.getMonth()) {
+      const day = document.createElement("button");
+      day.type = "button";
+      day.className = "milestone-day";
+      if (cursor.getDay() === 0 || cursor.getDay() === 6) day.classList.add("weekend");
+      if (cursor.getTime() === today.getTime()) day.classList.add("today");
+      if (cursor.getTime() === selected.getTime()) day.classList.add("selected");
+      day.dataset.action = "todo_date_pick";
+      day.dataset.field = field;
+      day.dataset.date = formatIsoDateOnly(cursor);
+      day.textContent = String(cursor.getDate());
+      daysHost.appendChild(day);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  };
+
+  if (todoStatusDatePickerState.action === "client_sent") {
+    if (applyBtn) applyBtn.textContent = "Salva invio e scadenza";
+    title.textContent = "Invio cliente e scadenza";
+    dualWrap.classList.remove("hidden");
+    confirmWrap.classList.add("hidden");
+    renderCalendar("sent", todoStatusDatePickerState.sentMonth, todoStatusDatePickerState.sentSelected);
+    renderCalendar("due", todoStatusDatePickerState.dueMonth, todoStatusDatePickerState.dueSelected);
+    const counterValue = panel.querySelector(".todo-status-counter-value");
+    if (counterValue) {
+      counterValue.classList.remove("is-warn", "is-danger", "is-soon", "is-future");
+      const dueDate = parseIsoDateOnly(todoStatusDatePickerState.dueSelected);
+      const remaining = dueDate ? businessDayDiff(startOfDay(new Date()), startOfDay(dueDate)) : null;
+      if (remaining == null) {
+        counterValue.textContent = "n/d";
+      } else if (remaining < 0) {
+        counterValue.textContent = `Scaduta da ${Math.abs(remaining)} giorni lavorativi`;
+        counterValue.classList.add("is-danger");
+      } else if (remaining <= 3) {
+        counterValue.textContent = "Scade oggi (0 giorni lavorativi)";
+        if (remaining > 0) {
+          counterValue.textContent = `In scadenza: ${remaining} giorni lavorativi`;
+        }
+        counterValue.classList.add("is-soon");
+      } else {
+        counterValue.textContent = `${remaining} giorni lavorativi rimanenti`;
+        counterValue.classList.add("is-future");
+      }
+    }
+    return;
+  }
+
+  const isSilenceDecision = todoStatusDatePickerState.action === "client_silence";
+  title.textContent = isSilenceDecision ? "Data decisione silenzio assenso" : "Data conferma cliente";
+  if (applyBtn) applyBtn.textContent = isSilenceDecision ? "Conferma silenzio assenso" : "Conferma data";
+  dualWrap.classList.add("hidden");
+  confirmWrap.classList.remove("hidden");
+  renderCalendar("confirm", todoStatusDatePickerState.confirmMonth, todoStatusDatePickerState.confirmSelected);
+}
+
+function openTodoStatusDatePicker(action) {
+  if (!todoStatusMenu || !todoMenuTarget) return;
+  const panel = todoStatusMenu.querySelector(".todo-status-date-panel");
+  if (!panel) return;
+  const existing = getTodoClientFlow(todoMenuTarget.commessaId, todoMenuTarget.titolo, todoMenuTarget.reparto);
+  const now = startOfDay(new Date());
+  todoStatusDatePickerState.action = action;
+  if (action === "client_sent") {
+    const sent = parseIsoDateOnly(existing?.sentAt) || now;
+    const due = parseIsoDateOnly(existing?.dueAt) || getDefaultClientFlowDueDate(sent) || now;
+    todoStatusDatePickerState.sentSelected = sent;
+    todoStatusDatePickerState.dueSelected = due;
+    todoStatusDatePickerState.sentMonth = new Date(sent.getFullYear(), sent.getMonth(), 1);
+    todoStatusDatePickerState.dueMonth = new Date(due.getFullYear(), due.getMonth(), 1);
+  } else {
+    const confirmed = parseIsoDateOnly(existing?.confirmedAt) || now;
+    todoStatusDatePickerState.confirmSelected = confirmed;
+    todoStatusDatePickerState.confirmMonth = new Date(confirmed.getFullYear(), confirmed.getMonth(), 1);
+  }
+  panel.classList.remove("hidden");
+  renderTodoStatusDatePicker();
+  requestAnimationFrame(() => repositionTodoStatusMenuToAnchor());
+}
+
+async function handleTodoStatusDatePickerAction(action, button) {
+  if (!todoStatusMenu) return false;
+  if (action === "todo_date_prev") {
+    const field = button?.dataset.field || "";
+    if (field === "sent") {
+      const month = todoStatusDatePickerState.sentMonth || startOfDay(new Date());
+      todoStatusDatePickerState.sentMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+    } else if (field === "due") {
+      const month = todoStatusDatePickerState.dueMonth || startOfDay(new Date());
+      todoStatusDatePickerState.dueMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+    } else {
+      const month = todoStatusDatePickerState.confirmMonth || startOfDay(new Date());
+      todoStatusDatePickerState.confirmMonth = new Date(month.getFullYear(), month.getMonth() - 1, 1);
+    }
+    renderTodoStatusDatePicker();
+    return false;
+  }
+  if (action === "todo_date_next") {
+    const field = button?.dataset.field || "";
+    if (field === "sent") {
+      const month = todoStatusDatePickerState.sentMonth || startOfDay(new Date());
+      todoStatusDatePickerState.sentMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+    } else if (field === "due") {
+      const month = todoStatusDatePickerState.dueMonth || startOfDay(new Date());
+      todoStatusDatePickerState.dueMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+    } else {
+      const month = todoStatusDatePickerState.confirmMonth || startOfDay(new Date());
+      todoStatusDatePickerState.confirmMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+    }
+    renderTodoStatusDatePicker();
+    return false;
+  }
+  if (action === "todo_date_pick") {
+    const iso = button?.dataset.date || "";
+    const field = button?.dataset.field || "";
+    const picked = parseIsoDateOnly(iso);
+    if (!picked) return false;
+    if (field === "sent") {
+      todoStatusDatePickerState.sentSelected = picked;
+      if (!todoStatusDatePickerState.dueSelected) {
+        todoStatusDatePickerState.dueSelected = getDefaultClientFlowDueDate(picked) || picked;
+      }
+    } else if (field === "due") {
+      todoStatusDatePickerState.dueSelected = picked;
+    } else {
+      todoStatusDatePickerState.confirmSelected = picked;
+    }
+    renderTodoStatusDatePicker();
+    return false;
+  }
+  if (action === "todo_date_cancel") {
+    closeTodoStatusDatePicker();
+    requestAnimationFrame(() => repositionTodoStatusMenuToAnchor());
+    return false;
+  }
+  if (action === "todo_date_apply") {
+    if (!todoMenuTarget || !todoStatusDatePickerState.action) return false;
+    if (todoStatusDatePickerState.action === "client_sent") {
+      const sent = parseIsoDateOnly(todoStatusDatePickerState.sentSelected) || startOfDay(new Date());
+      const due = parseIsoDateOnly(todoStatusDatePickerState.dueSelected) || getDefaultClientFlowDueDate(sent) || sent;
+      if (dayNumberUTC(due) < dayNumberUTC(sent)) {
+        setStatus("La scadenza non puo essere prima dell'invio.", "error");
+        return false;
+      }
+      const updated = await applyTodoStatusAction(todoStatusDatePickerState.action, todoMenuTarget, {
+        selectedDate: formatIsoDateOnly(sent),
+        dueDate: formatIsoDateOnly(due),
+      });
+      return updated;
+    }
+    const selectedDate = formatIsoDateOnly(todoStatusDatePickerState.confirmSelected || startOfDay(new Date()));
+    const updated = await applyTodoStatusAction(todoStatusDatePickerState.action, todoMenuTarget, { selectedDate });
+    return updated;
+  }
+  return false;
+}
+
+function positionTodoStatusMenuCentered() {
+  if (!todoStatusMenu || todoStatusMenu.classList.contains("hidden")) return;
+  const padding = 10;
+  const rect = todoStatusMenu.getBoundingClientRect();
+  let left = Math.round((window.innerWidth - rect.width) / 2);
+  let top = Math.round((window.innerHeight - rect.height) / 2);
+  left = Math.max(padding, left);
+  top = Math.max(padding, top);
+  if (left + rect.width > window.innerWidth - padding) {
+    left = Math.max(padding, window.innerWidth - rect.width - padding);
+  }
+  if (top + rect.height > window.innerHeight - padding) {
+    top = Math.max(padding, window.innerHeight - rect.height - padding);
+  }
+  todoStatusMenu.style.left = `${left}px`;
+  todoStatusMenu.style.top = `${top}px`;
+}
+
+function positionTodoStatusMenuWithinViewport() {
+  if (!todoStatusMenu || todoStatusMenu.classList.contains("hidden")) return;
+  const padding = 10;
+  const rect = todoStatusMenu.getBoundingClientRect();
+  const leftRaw = Number.parseFloat(todoStatusMenu.style.left);
+  const topRaw = Number.parseFloat(todoStatusMenu.style.top);
+  let left = Number.isFinite(leftRaw) ? leftRaw : rect.left;
+  let top = Number.isFinite(topRaw) ? topRaw : rect.top;
+  if (left + rect.width > window.innerWidth - padding) {
+    left = Math.max(padding, window.innerWidth - rect.width - padding);
+  }
+  if (top + rect.height > window.innerHeight - padding) {
+    top = Math.max(padding, window.innerHeight - rect.height - padding);
+  }
+  if (left < padding) left = padding;
+  if (top < padding) top = padding;
+  todoStatusMenu.style.left = `${left}px`;
+  todoStatusMenu.style.top = `${top}px`;
+}
+
+function isTodoStatusMenuBorderHit(event) {
+  if (!todoStatusMenu) return false;
+  const rect = todoStatusMenu.getBoundingClientRect();
+  const grip = 12;
+  const x = event.clientX;
+  const y = event.clientY;
+  return x - rect.left <= grip || rect.right - x <= grip || y - rect.top <= grip || rect.bottom - y <= grip;
 }
 
 function openTodoStatusMenu(cell, x, y) {
@@ -7451,12 +8301,24 @@ function openTodoStatusMenu(cell, x, y) {
     return;
   }
   const rowKey = cell.dataset.todoRow || "";
+  const commessa =
+    (state.commesse || []).find((c) => String(c.id) === String(commessaId)) ||
+    (todoLastRendered || []).find((c) => String(c.id) === String(commessaId)) ||
+    null;
+  const commessaNumero = commessa?.numero != null ? String(commessa.numero) : "-";
+  const commessaAnno = commessa?.anno != null ? String(commessa.anno) : "-";
+  const commessaTitolo = String(commessa?.titolo || "Senza descrizione");
 
   const role = getTodoRole();
   const entries = getTodoEntriesForCell(commessaId, titolo, reparto);
   const editableEntries = getTodoEditableEntries(entries, reparto);
   const currentStatus = getTodoStatusFor(commessaId, titolo, reparto);
-  const actionDefs =
+  const isClientTracked = isTodoClientFlowTracked(titolo, reparto);
+  const canAccessClientFlow = isClientTracked && currentStatus === "fatta";
+  const clientFlow = isClientTracked ? getTodoClientFlow(commessaId, titolo, reparto) : null;
+  const clientFlowResolvedStatus = isClientTracked ? getTodoClientFlowResolvedStatus(clientFlow, startOfDay(new Date())) : "";
+  const clientFlowBlockReason = isClientTracked ? getTodoClientFlowEditBlockReason(titolo, reparto) : "";
+  const statusActions =
     role === "operatore"
       ? [
           { action: "planned", label: "PLANNED" },
@@ -7466,17 +8328,19 @@ function openTodoStatusMenu(cell, x, y) {
           { action: "to_plan", label: "TO PLAN" },
           { action: "planned", label: "PLANNED" },
           { action: "done", label: "DONE" },
-          { action: "non_necessaria", label: "NON NECESSARIA" },
+          { action: "non_necessaria", label: "NOT NEED" },
         ];
-  if (currentStatus === "schedulata") {
-    actionDefs.unshift({ action: "go_matrix", label: "\u2197 APRI IN MATRICE" });
+  const clientActions = [];
+  if (canAccessClientFlow) {
+    clientActions.push(
+      { action: "client_sent", label: "CLIENTE: INVIATO..." },
+      { action: "client_confirmed", label: "CLIENTE: CONFERMATO" },
+      { action: "client_silence", label: "CLIENTE: SILENZIO ASSENSO..." },
+      { action: "client_reset", label: "CLIENTE: RESET" }
+    );
   }
-  todoStatusMenu.innerHTML = "";
-  actionDefs.forEach((def) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.action = def.action;
-    button.textContent = def.label;
+  const canShowGoMatrix = currentStatus === "schedulata";
+  const getBlockReason = (def) => {
     let blockReason = "";
     const requiresEditableRows = def.action === "planned" || def.action === "done";
     if (requiresEditableRows && !editableEntries.length) {
@@ -7494,58 +8358,188 @@ function openTodoStatusMenu(cell, x, y) {
     if (!blockReason && def.action === "to_plan" && role === "operatore") {
       blockReason = "Operatore: TO PLAN non disponibile da questo menu.";
     }
-    if (!blockReason && def.action === "non_necessaria" && currentStatus === "non_necessaria") {
-      blockReason = "Questa attivita e gia NON NECESSARIA.";
+    if (!blockReason && def.action.startsWith("client_") && clientFlowBlockReason) {
+      blockReason = clientFlowBlockReason;
     }
-    if (blockReason) {
-      button.dataset.blocked = "1";
-      button.dataset.blockReason = blockReason;
-      button.classList.add("is-blocked");
+    if (!blockReason && def.action === "client_confirmed" && !clientFlow?.sentAt) {
+      blockReason = "Prima registra la data di invio al cliente.";
     }
-    todoStatusMenu.appendChild(button);
-  });
+    if (!blockReason && def.action === "client_silence" && !clientFlow?.sentAt) {
+      blockReason = "Prima registra la data di invio al cliente.";
+    }
+    if (!blockReason && def.action === "client_reset" && !clientFlow) {
+      blockReason = "Nessun tracking cliente da resettare.";
+    }
+    return blockReason;
+  };
+  const goMatrixDef = { action: "go_matrix", label: "\u2197 Apri in matrice", title: "Apri in matrice" };
+  const goMatrixBlockReason = canShowGoMatrix ? getBlockReason(goMatrixDef) : "";
+  const appendSection = (title, defs, extraClass = "") => {
+    if (!defs.length) return;
+    const section = document.createElement("div");
+    section.className = `todo-status-section ${extraClass}`.trim();
+    if (title) {
+      const titleEl = document.createElement("div");
+      titleEl.className = "todo-status-section-title";
+      titleEl.textContent = title;
+      section.appendChild(titleEl);
+    }
+    const row = document.createElement("div");
+    row.className = "todo-status-row";
+    defs.forEach((def) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.action = def.action;
+      button.textContent = def.label;
+      if (def.action === "planned" && currentStatus === "schedulata") {
+        button.classList.add("is-planned");
+      }
+      if (def.action === "done" && currentStatus === "fatta") {
+        button.classList.add("is-success");
+      }
+      if (def.action === "non_necessaria" && currentStatus === "non_necessaria") {
+        button.classList.add("is-not-needed");
+      }
+      if (
+        def.action === "client_sent" &&
+        clientFlow?.sentAt &&
+        (clientFlowResolvedStatus === "in_attesa" || clientFlowResolvedStatus === "scaduto")
+      ) {
+        button.classList.add("is-client-sent");
+      }
+      if (def.action === "client_confirmed" && clientFlowResolvedStatus === "confermato") {
+        button.classList.add("is-success");
+      }
+      if (def.action === "client_silence" && clientFlowResolvedStatus === "silenzio_assenso") {
+        button.classList.add("is-success");
+      }
+      if (def.iconOnly) {
+        button.classList.add("todo-status-btn-icon");
+        button.setAttribute("aria-label", def.title || def.label);
+        if (def.title) button.title = def.title;
+      }
+      const blockReason = getBlockReason(def);
+      if (blockReason) {
+        button.dataset.blocked = "1";
+        button.dataset.blockReason = blockReason;
+        button.classList.add("is-blocked");
+      }
+      row.appendChild(button);
+    });
+    section.appendChild(row);
+    todoStatusMenu.appendChild(section);
+  };
+  const appendInfoSection = (title, text) => {
+    const section = document.createElement("div");
+    section.className = "todo-status-section";
+    if (title) {
+      const titleEl = document.createElement("div");
+      titleEl.className = "todo-status-section-title";
+      titleEl.textContent = title;
+      section.appendChild(titleEl);
+    }
+    const note = document.createElement("div");
+    note.className = "todo-status-section-note";
+    note.textContent = text;
+    section.appendChild(note);
+    todoStatusMenu.appendChild(section);
+  };
+  todoStatusMenu.innerHTML = "";
+  const contextBox = document.createElement("div");
+  contextBox.className = "todo-status-context";
+  const goMatrixButtonHtml = canShowGoMatrix
+    ? `<button type="button" data-action="go_matrix" class="todo-status-context-matrix${
+        goMatrixBlockReason ? " is-blocked" : ""
+      }"${goMatrixBlockReason ? ` data-blocked="1" data-block-reason="${escapeHtml(goMatrixBlockReason)}"` : ""}>${goMatrixDef.label}</button>`
+    : "";
+  contextBox.innerHTML = `
+    <div class="todo-status-context-meta">Commessa ${escapeHtml(commessaNumero)} · ${escapeHtml(commessaAnno)}</div>
+    <div class="todo-status-context-main">
+      <a href="#" data-action="open_commessa_detail" class="todo-status-context-link" title="${escapeHtml(commessaTitolo)}">${escapeHtml(commessaTitolo)}</a>
+      ${goMatrixButtonHtml}
+    </div>
+  `;
+  todoStatusMenu.appendChild(contextBox);
+  appendSection("Stato attivita", statusActions);
+  const clientSectionTitle = getTodoClientFlowSectionTitle(titolo);
+  if (canAccessClientFlow) {
+    appendSection(clientSectionTitle, clientActions);
+  } else if (isClientTracked) {
+    appendInfoSection(clientSectionTitle, "Livello 2 disponibile solo con stato DONE.");
+  }
+  if (clientActions.length) {
+    const datePanel = document.createElement("div");
+    datePanel.className = "todo-status-date-panel hidden";
+    datePanel.innerHTML = `
+      <div class="todo-status-date-title">Seleziona data</div>
+      <div class="todo-status-date-dual">
+        <div class="todo-status-date-calendar" data-field="sent">
+          <div class="todo-status-date-subtitle">Invio</div>
+          <div class="todo-status-date-head">
+            <button type="button" data-action="todo_date_prev" data-field="sent" aria-label="Mese precedente invio">◀</button>
+            <div class="todo-status-date-label"></div>
+            <button type="button" data-action="todo_date_next" data-field="sent" aria-label="Mese successivo invio">▶</button>
+          </div>
+          <div class="milestone-weekdays">
+            <span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span>
+          </div>
+          <div class="todo-status-date-days milestone-days"></div>
+        </div>
+        <div class="todo-status-date-calendar" data-field="due">
+          <div class="todo-status-date-subtitle">Scadenza</div>
+          <div class="todo-status-date-head">
+            <button type="button" data-action="todo_date_prev" data-field="due" aria-label="Mese precedente scadenza">◀</button>
+            <div class="todo-status-date-label"></div>
+            <button type="button" data-action="todo_date_next" data-field="due" aria-label="Mese successivo scadenza">▶</button>
+          </div>
+          <div class="milestone-weekdays">
+            <span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span>
+          </div>
+          <div class="todo-status-date-days milestone-days"></div>
+        </div>
+        <div class="todo-status-date-counter">
+          <div class="todo-status-counter-label">Tempo rimanente</div>
+          <div class="todo-status-counter-value">n/d</div>
+        </div>
+      </div>
+      <div class="todo-status-date-confirm hidden">
+        <div class="todo-status-date-calendar" data-field="confirm">
+          <div class="todo-status-date-subtitle">Conferma</div>
+          <div class="todo-status-date-head">
+            <button type="button" data-action="todo_date_prev" data-field="confirm" aria-label="Mese precedente conferma">◀</button>
+            <div class="todo-status-date-label"></div>
+            <button type="button" data-action="todo_date_next" data-field="confirm" aria-label="Mese successivo conferma">▶</button>
+          </div>
+          <div class="milestone-weekdays">
+            <span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span>
+          </div>
+          <div class="todo-status-date-days milestone-days"></div>
+        </div>
+      </div>
+      <div class="todo-status-date-actions">
+        <button type="button" data-action="todo_date_cancel">Annulla</button>
+        <button type="button" data-action="todo_date_apply">Conferma data</button>
+      </div>
+    `;
+    todoStatusMenu.appendChild(datePanel);
+  }
+  closeTodoStatusDatePicker();
   todoMenuTarget = { commessaId, titolo, reparto };
-  todoMenuAnchorEl = cell.querySelector(".todo-status") || cell;
+  todoMenuAnchorEl = null;
+  todoStatusMenuManualPosition = false;
   todoStatusMenu.classList.remove("hidden");
   setTodoMenuFocus(rowKey);
-  const padding = 10;
-  let left = x + 8;
-  let top = y + 8;
-  todoStatusMenu.style.left = `${left}px`;
-  todoStatusMenu.style.top = `${top}px`;
-  requestAnimationFrame(() => {
-    const rect = todoStatusMenu.getBoundingClientRect();
-    if (rect.right > window.innerWidth - padding) {
-      left = Math.max(padding, window.innerWidth - rect.width - padding);
-    }
-    if (rect.bottom > window.innerHeight - padding) {
-      top = Math.max(padding, window.innerHeight - rect.height - padding);
-    }
-    todoStatusMenu.style.left = `${left}px`;
-    todoStatusMenu.style.top = `${top}px`;
-  });
+  positionTodoStatusMenuCentered();
+  requestAnimationFrame(() => positionTodoStatusMenuCentered());
 }
 
 function repositionTodoStatusMenuToAnchor() {
   if (!todoStatusMenu || todoStatusMenu.classList.contains("hidden")) return;
-  if (!todoMenuAnchorEl || !document.body.contains(todoMenuAnchorEl)) return;
-  const anchorRect = todoMenuAnchorEl.getBoundingClientRect();
-  const padding = 10;
-  let left = anchorRect.left + anchorRect.width / 2 + 8;
-  let top = anchorRect.bottom + 8;
-  todoStatusMenu.style.left = `${left}px`;
-  todoStatusMenu.style.top = `${top}px`;
-  const rect = todoStatusMenu.getBoundingClientRect();
-  if (rect.right > window.innerWidth - padding) {
-    left = Math.max(padding, window.innerWidth - rect.width - padding);
+  if (todoStatusMenuManualPosition) {
+    positionTodoStatusMenuWithinViewport();
+    return;
   }
-  if (rect.bottom > window.innerHeight - padding) {
-    top = Math.max(padding, anchorRect.top - rect.height - 8);
-  }
-  if (left < padding) left = padding;
-  if (top < padding) top = padding;
-  todoStatusMenu.style.left = `${left}px`;
-  todoStatusMenu.style.top = `${top}px`;
+  positionTodoStatusMenuCentered();
 }
 
 function setTodoMenuFocus(rowKey = "") {
@@ -7565,6 +8559,10 @@ function setTodoMenuFocus(rowKey = "") {
 
 function closeTodoStatusMenu() {
   if (!todoStatusMenu) return;
+  todoStatusMenuDrag = null;
+  todoStatusMenu.style.cursor = "";
+  todoStatusMenuManualPosition = false;
+  closeTodoStatusDatePicker();
   todoStatusMenu.classList.add("hidden");
   todoMenuTarget = null;
   todoMenuAnchorEl = null;
@@ -7695,16 +8693,157 @@ async function openTodoActivityInMatrix(target) {
   return true;
 }
 
+function setTodoClientFlowInState(row) {
+  const normalized = normalizeTodoClientFlowRow(row);
+  if (!normalized) return;
+  const key = buildTodoClientFlowKey(normalized.commessaId, normalized.titolo, normalized.reparto);
+  state.todoClientFlowMap.set(key, normalized);
+  state.todoClientFlowLoadedCommesse.add(String(normalized.commessaId));
+}
+
+function removeTodoClientFlowFromState(target) {
+  if (!target?.commessaId || !target?.titolo) return;
+  const key = buildTodoClientFlowKey(target.commessaId, target.titolo, target.reparto || "");
+  state.todoClientFlowMap.delete(key);
+}
+
+async function upsertTodoClientFlow(target, patch) {
+  if (!target?.commessaId || !target?.titolo) return { ok: false, error: "Target non valido." };
+  const payload = {
+    commessa_id: target.commessaId,
+    titolo: target.titolo,
+    reparto: target.reparto || "",
+    updated_by: state.profile?.id || null,
+    ...patch,
+  };
+  const { data, error } = await supabase
+    .from("commessa_attivita_cliente")
+    .upsert(payload, { onConflict: "commessa_id,titolo,reparto" })
+    .select("commessa_id,titolo,reparto,inviato_il,scadenza_il,esito,confermato_il,updated_at")
+    .single();
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+  if (data) setTodoClientFlowInState(data);
+  return { ok: true };
+}
+
+async function deleteTodoClientFlow(target) {
+  if (!target?.commessaId || !target?.titolo) return { ok: false, error: "Target non valido." };
+  const { error } = await supabase
+    .from("commessa_attivita_cliente")
+    .delete()
+    .eq("commessa_id", target.commessaId)
+    .eq("titolo", target.titolo)
+    .eq("reparto", target.reparto || "");
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+  removeTodoClientFlowFromState(target);
+  return { ok: true };
+}
+
+async function applyTodoClientFlowAction(action, target, options = {}) {
+  if (!target) return false;
+  const activityStatus = getTodoStatusFor(target.commessaId, target.titolo, target.reparto || "");
+  if (activityStatus !== "fatta") {
+    setStatus("Livello cliente disponibile solo quando l'attivita e DONE.", "error");
+    return false;
+  }
+  const blockReason = getTodoClientFlowEditBlockReason(target.titolo, target.reparto || "");
+  if (blockReason) {
+    setStatus(blockReason, "error");
+    return false;
+  }
+  const existing = getTodoClientFlow(target.commessaId, target.titolo, target.reparto);
+  if (action === "client_sent") {
+    const sentAt = parseIsoDateOnly(options.selectedDate) || startOfDay(new Date());
+    const dueAt = parseIsoDateOnly(options.dueDate) || existing?.dueAt || getDefaultClientFlowDueDate(sentAt);
+    if (dueAt && dayNumberUTC(dueAt) < dayNumberUTC(sentAt)) {
+      setStatus("La scadenza non puo essere prima dell'invio.", "error");
+      return false;
+    }
+    const result = await upsertTodoClientFlow(target, {
+      inviato_il: formatIsoDateOnly(sentAt),
+      scadenza_il: formatIsoDateOnly(dueAt),
+      esito: TODO_CLIENT_FLOW_OUTCOME.IN_ATTESA,
+      confermato_il: null,
+    });
+    if (!result.ok) {
+      setStatus(`Update error: ${result.error}`, "error");
+      return false;
+    }
+    refreshTodoVisualizationNow();
+    refreshMatrixClientFlowIndicatorsForTarget(target);
+    void refreshTodoData();
+    setStatus("Tracking cliente aggiornato: inviato.", "ok");
+    return true;
+  }
+  if (action === "client_reset") {
+    const result = await deleteTodoClientFlow(target);
+    if (!result.ok) {
+      setStatus(`Update error: ${result.error}`, "error");
+      return false;
+    }
+    refreshMatrixClientFlowIndicatorsForTarget(target);
+    refreshTodoVisualizationNow();
+    void refreshTodoData();
+    setStatus("Tracking cliente resettato.", "ok");
+    return true;
+  }
+  if (!existing?.sentAt) {
+    setStatus("Prima registra la data di invio al cliente.", "error");
+    return false;
+  }
+  if (action === "client_confirmed") {
+    const confirmAt = parseIsoDateOnly(options.selectedDate) || startOfDay(new Date());
+    const result = await upsertTodoClientFlow(target, {
+      inviato_il: formatIsoDateOnly(existing.sentAt),
+      scadenza_il: formatIsoDateOnly(existing.dueAt || getDefaultClientFlowDueDate(existing.sentAt)),
+      esito: TODO_CLIENT_FLOW_OUTCOME.CONFERMATO,
+      confermato_il: formatIsoDateOnly(confirmAt),
+    });
+    if (!result.ok) {
+      setStatus(`Update error: ${result.error}`, "error");
+      return false;
+    }
+    refreshTodoVisualizationNow();
+    refreshMatrixClientFlowIndicatorsForTarget(target);
+    void refreshTodoData();
+    setStatus("Tracking cliente aggiornato: confermato.", "ok");
+    return true;
+  }
+  if (action === "client_silence") {
+    const decisionAt = parseIsoDateOnly(options.selectedDate) || startOfDay(new Date());
+    const result = await upsertTodoClientFlow(target, {
+      inviato_il: formatIsoDateOnly(existing.sentAt),
+      scadenza_il: formatIsoDateOnly(existing.dueAt || getDefaultClientFlowDueDate(existing.sentAt)),
+      esito: TODO_CLIENT_FLOW_OUTCOME.SILENZIO_ASSENSO,
+      confermato_il: formatIsoDateOnly(decisionAt),
+    });
+    if (!result.ok) {
+      setStatus(`Update error: ${result.error}`, "error");
+      return false;
+    }
+    refreshTodoVisualizationNow();
+    refreshMatrixClientFlowIndicatorsForTarget(target);
+    void refreshTodoData();
+    setStatus("Tracking cliente aggiornato: silenzio assenso.", "ok");
+    return true;
+  }
+  return false;
+}
+
 async function setTodoOverride(commessaId, titolo, enabled) {
-  if (!commessaId || !titolo) return;
-  if (!state.canWrite) return;
+  if (!commessaId || !titolo) return false;
+  if (!state.canWrite) return false;
   if (enabled) {
     const { error } = await supabase
       .from("commessa_attivita_override")
       .upsert({ commessa_id: commessaId, titolo, stato: "non_necessaria" }, { onConflict: "commessa_id,titolo" });
     if (error) {
       setStatus(`Update error: ${error.message}`, "error");
-      return;
+      return false;
     }
   } else {
     const { error } = await supabase
@@ -7714,7 +8853,7 @@ async function setTodoOverride(commessaId, titolo, enabled) {
       .eq("titolo", titolo);
     if (error) {
       setStatus(`Update error: ${error.message}`, "error");
-      return;
+      return false;
     }
   }
   const key = String(commessaId);
@@ -7725,12 +8864,41 @@ async function setTodoOverride(commessaId, titolo, enabled) {
     list.delete(normalizePhaseKey(titolo));
   }
   state.todoOverridesMap.set(key, list);
+  return true;
 }
 
 async function updateTodoActivitiesStatus(ids, stato) {
   if (!ids.length) return null;
   const { error } = await supabase.from("attivita").update({ stato }).in("id", ids);
   return error || null;
+}
+
+function applyMatrixActivityStatusPatch(ids, stato) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const idSet = new Set(ids.map((id) => String(id)).filter(Boolean));
+  if (!idSet.size) return;
+  const byId = new Map((matrixState.attivita || []).map((entry) => [String(entry.id), entry]));
+  (matrixState.attivita || []).forEach((entry) => {
+    const key = entry?.id != null ? String(entry.id) : "";
+    if (idSet.has(key)) {
+      entry.stato = stato;
+    }
+  });
+  if (!matrixGrid) return;
+  const isDone = stato === "completata";
+  matrixGrid.querySelectorAll(".matrix-activity-bar[data-activity-id]").forEach((bar) => {
+    const key = String(bar.dataset.activityId || "");
+    if (!idSet.has(key)) return;
+    bar.classList.toggle("is-done", isDone);
+    const entry = byId.get(key);
+    const fallback = entry || {
+      commessa_id: bar.dataset.commessaId || "",
+      titolo: bar.dataset.attivita || "",
+      stato,
+      reparto: bar.dataset.reparto || "",
+    };
+    applyMatrixBarClientFlowClasses(bar, fallback, bar.dataset.reparto || "");
+  });
 }
 
 async function refreshTodoData() {
@@ -7740,12 +8908,16 @@ async function refreshTodoData() {
   }
   await loadReportActivitiesFor(todoLastRendered);
   await loadTodoOverridesFor(todoLastRendered);
+  await loadTodoClientFlowsFor(todoLastRendered);
 }
 
-async function applyTodoStatusAction(action, target) {
+async function applyTodoStatusAction(action, target, options = {}) {
   if (!target) return false;
   if (action === "go_matrix") {
     return openTodoActivityInMatrix(target);
+  }
+  if (action.startsWith("client_")) {
+    return applyTodoClientFlowAction(action, target, options);
   }
   const { commessaId, titolo, reparto } = target;
   const entries = getTodoEntriesForCell(commessaId, titolo, reparto);
@@ -7757,29 +8929,41 @@ async function applyTodoStatusAction(action, target) {
       setStatus("Permessi insufficienti su questa attivita.", "error");
       return false;
     }
-    await setTodoOverride(commessaId, titolo, false);
+    const overrideCleared = await setTodoOverride(commessaId, titolo, false);
+    if (!overrideCleared) return false;
     const nextState = action === "done" ? "completata" : "pianificata";
     const error = await updateTodoActivitiesStatus(editableIds, nextState);
     if (error) {
       setStatus(`Update error: ${error.message}`, "error");
       return false;
     }
+    editableEntries.forEach((entry) => {
+      entry.stato = nextState;
+    });
+    applyMatrixActivityStatusPatch(editableIds, nextState);
   } else if (action === "to_plan") {
-    await setTodoOverride(commessaId, titolo, false);
+    const overrideCleared = await setTodoOverride(commessaId, titolo, false);
+    if (!overrideCleared) return false;
     if (editableIds.length) {
       const error = await updateTodoActivitiesStatus(editableIds, "annullata");
       if (error) {
         setStatus(`Update error: ${error.message}`, "error");
         return false;
       }
+      editableEntries.forEach((entry) => {
+        entry.stato = "annullata";
+      });
+      applyMatrixActivityStatusPatch(editableIds, "annullata");
     }
   } else if (action === "non_necessaria") {
-    await setTodoOverride(commessaId, titolo, true);
+    const overrideSet = await setTodoOverride(commessaId, titolo, true);
+    if (!overrideSet) return false;
   } else {
     return false;
   }
 
-  await refreshTodoData();
+  refreshTodoCellVisualFromState(target);
+  void refreshTodoData();
   setStatus("Status aggiornato.", "ok");
   return true;
 }
@@ -8743,14 +9927,33 @@ function renderCalendar(start, end) {
   });
 }
 
+async function refreshTodoRealtimeSnapshot() {
+  if (!state.session) return;
+  const base =
+    todoLastRendered && todoLastRendered.length ? todoLastRendered : (state.commesse || []).slice(0, REPORT_MAX_ITEMS);
+  if (!base.length || base.length > REPORT_MAX_ITEMS) return;
+  await loadReportActivitiesFor(base);
+  await loadTodoOverridesFor(base);
+  await loadTodoClientFlowsFor(base);
+}
+
 async function setupRealtime() {
   if (state.realtime) return;
   state.realtime = supabase
     .channel("realtime-commesse")
     .on("postgres_changes", { event: "*", schema: "public", table: "commesse" }, loadCommesse)
     .on("postgres_changes", { event: "*", schema: "public", table: "commesse_reparti" }, loadCommesse)
-    .on("postgres_changes", { event: "*", schema: "public", table: "attivita" }, loadAttivita)
-    .on("postgres_changes", { event: "*", schema: "public", table: "attivita" }, loadMatrixAttivita)
+    .on("postgres_changes", { event: "*", schema: "public", table: "attivita" }, async () => {
+      await loadAttivita();
+      await loadMatrixAttivita();
+      await refreshTodoRealtimeSnapshot();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "commessa_attivita_override" }, async () => {
+      await refreshTodoRealtimeSnapshot();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "commessa_attivita_cliente" }, async () => {
+      await refreshTodoRealtimeSnapshot();
+    })
     .subscribe();
 }
 
@@ -9031,6 +10234,7 @@ async function handleAssignConfirm() {
   setStatus("Activities assigned.", "ok");
   closeAssignModal();
   await loadMatrixAttivita();
+  await refreshTodoRealtimeSnapshot();
   } catch (err) {
     setStatus(`Assignment error: ${err.message || err}`, "error");
   } finally {
@@ -9182,10 +10386,10 @@ if (yearFilter) yearFilter.addEventListener("change", applyFilters);
 if (reportDescFilter) reportDescFilter.addEventListener("input", renderMatrixReport);
 if (reportNumberFilter) reportNumberFilter.addEventListener("input", renderMatrixReport);
 if (reportYearFilter) reportYearFilter.addEventListener("change", renderMatrixReport);
-if (todoDescFilter) todoDescFilter.addEventListener("input", renderMatrixReport);
-if (todoNumberFilter) todoNumberFilter.addEventListener("input", renderMatrixReport);
-if (todoYearFilter) todoYearFilter.addEventListener("change", renderMatrixReport);
-if (todoPriorityField) todoPriorityField.addEventListener("change", renderMatrixReport);
+if (todoDescFilter) todoDescFilter.addEventListener("input", renderMatrixReportFromTodoFilters);
+if (todoNumberFilter) todoNumberFilter.addEventListener("input", renderMatrixReportFromTodoFilters);
+if (todoYearFilter) todoYearFilter.addEventListener("change", renderMatrixReportFromTodoFilters);
+if (todoPriorityField) todoPriorityField.addEventListener("change", renderMatrixReportFromTodoFilters);
 if (todoPriorityBtn) {
   renderTodoPriorityButtonLabel();
   todoPriorityBtn.addEventListener("click", () => {
@@ -9193,7 +10397,7 @@ if (todoPriorityBtn) {
     const next = mode === "off" ? "asc" : "off";
     todoPriorityBtn.dataset.mode = next;
     renderTodoPriorityButtonLabel();
-    renderMatrixReport();
+    renderMatrixReportFromTodoFilters();
   });
 }
 if (todoSortBtn) {
@@ -9203,7 +10407,7 @@ if (todoSortBtn) {
     const next = mode === "off" ? "asc" : mode === "asc" ? "desc" : "off";
     todoSortBtn.dataset.mode = next;
     renderTodoSortButtonLabel();
-    renderMatrixReport();
+    renderMatrixReportFromTodoFilters();
   });
 }
 if (todoCompleteBtn) {
@@ -9211,20 +10415,18 @@ if (todoCompleteBtn) {
   todoCompleteBtn.addEventListener("click", () => {
     todoCompleteBtn.classList.toggle("active");
     renderTodoCompleteButtonLabel();
-    renderMatrixReport();
+    renderMatrixReportFromTodoFilters();
   });
 }
+todoFilterControls.forEach((control) => {
+  control.addEventListener("focus", lockTodoGridHeightForFilters);
+  control.addEventListener("blur", scheduleTodoGridHeightUnlock);
+});
 if (todoGrid && todoHeaderTableHost) {
   todoGrid.addEventListener("scroll", () => {
     if (todoScrollSyncLock) return;
     todoScrollSyncLock = true;
     todoHeaderTableHost.scrollLeft = todoGrid.scrollLeft;
-    todoScrollSyncLock = false;
-  });
-  todoHeaderTableHost.addEventListener("scroll", () => {
-    if (todoScrollSyncLock) return;
-    todoScrollSyncLock = true;
-    todoGrid.scrollLeft = todoHeaderTableHost.scrollLeft;
     todoScrollSyncLock = false;
   });
 }
@@ -9351,6 +10553,14 @@ if (reportPanel && reportTitle) {
   reportTitle.addEventListener("click", () => {
     reportPanel.classList.toggle("collapsed");
     if (!reportPanel.classList.contains("collapsed")) {
+      renderMatrixReport();
+    }
+  });
+}
+if (todoSection && todoTitle) {
+  todoTitle.addEventListener("click", () => {
+    todoSection.classList.toggle("collapsed");
+    if (!todoSection.classList.contains("collapsed")) {
       renderMatrixReport();
     }
   });
@@ -9935,23 +11145,126 @@ if (sectionToolbar && typeof ResizeObserver !== "undefined") {
   toolbarObserver.observe(sectionToolbar);
 }
 if (todoStatusMenu) {
+  todoStatusMenu.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    if (todoStatusMenu.classList.contains("hidden")) return;
+    if (!isTodoStatusMenuBorderHit(event)) return;
+    const rect = todoStatusMenu.getBoundingClientRect();
+    todoStatusMenuDrag = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      moved: false,
+    };
+    todoStatusMenuManualPosition = true;
+    todoStatusMenu.style.cursor = "move";
+    if (typeof todoStatusMenu.setPointerCapture === "function") {
+      todoStatusMenu.setPointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  todoStatusMenu.addEventListener("pointermove", (event) => {
+    if (!todoStatusMenuDrag) {
+      todoStatusMenu.style.cursor = isTodoStatusMenuBorderHit(event) ? "move" : "";
+      return;
+    }
+    if (event.pointerId !== todoStatusMenuDrag.pointerId) return;
+    const padding = 10;
+    const rect = todoStatusMenu.getBoundingClientRect();
+    let left = event.clientX - todoStatusMenuDrag.offsetX;
+    let top = event.clientY - todoStatusMenuDrag.offsetY;
+    left = Math.max(padding, Math.min(left, window.innerWidth - rect.width - padding));
+    top = Math.max(padding, Math.min(top, window.innerHeight - rect.height - padding));
+    todoStatusMenu.style.left = `${left}px`;
+    todoStatusMenu.style.top = `${top}px`;
+    todoStatusMenuDrag.moved = true;
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  const stopTodoStatusMenuDrag = (event) => {
+    if (!todoStatusMenuDrag) return;
+    if (event.pointerId !== todoStatusMenuDrag.pointerId) return;
+    const wasMoved = todoStatusMenuDrag.moved;
+    todoStatusMenuDrag = null;
+    if (typeof todoStatusMenu.releasePointerCapture === "function") {
+      try {
+        todoStatusMenu.releasePointerCapture(event.pointerId);
+      } catch (_err) {}
+    }
+    todoStatusMenu.style.cursor = "";
+    if (wasMoved) {
+      todoStatusMenuDragSuppressClickUntil = Date.now() + 200;
+    }
+    event.stopPropagation();
+  };
+  todoStatusMenu.addEventListener("pointerup", stopTodoStatusMenuDrag);
+  todoStatusMenu.addEventListener("pointercancel", stopTodoStatusMenuDrag);
+  todoStatusMenu.addEventListener("pointerleave", () => {
+    if (!todoStatusMenuDrag) todoStatusMenu.style.cursor = "";
+  });
   todoStatusMenu.addEventListener("click", async (event) => {
-    const target = event.target.closest("button");
+    event.stopPropagation();
+    if (Date.now() < todoStatusMenuDragSuppressClickUntil) {
+      event.preventDefault();
+      return;
+    }
+    const target = event.target.closest("[data-action]");
     if (!target || !todoMenuTarget) return;
+    if (target.tagName === "A") event.preventDefault();
+    const action = target.dataset.action;
+    if (!action) return;
+    if (action === "open_commessa_detail") {
+      const commessaId = todoMenuTarget.commessaId;
+      if (!commessaId) return;
+      selectCommessa(commessaId, { openModal: true });
+      closeTodoStatusMenu();
+      return;
+    }
+    if (action.startsWith("todo_date_")) {
+      const shouldClose = await handleTodoStatusDatePickerAction(action, target);
+      if (shouldClose) closeTodoStatusMenu();
+      return;
+    }
     if (target.dataset.blocked === "1") {
       setStatus(target.dataset.blockReason || "Azione non disponibile.", "error");
       return;
     }
-    const action = target.dataset.action;
-    if (!action) return;
+    if (action === "client_sent" || action === "client_confirmed" || action === "client_silence") {
+      openTodoStatusDatePicker(action);
+      return;
+    }
     const updated = await applyTodoStatusAction(action, todoMenuTarget);
     if (updated) {
+      if (action === "done") {
+        const prevManual = todoStatusMenuManualPosition;
+        const prevLeft = todoStatusMenu?.style.left || "";
+        const prevTop = todoStatusMenu?.style.top || "";
+        const targetCell = findTodoCellByTarget(
+          todoMenuTarget.commessaId,
+          todoMenuTarget.titolo,
+          todoMenuTarget.reparto || ""
+        );
+        if (targetCell) {
+          openTodoStatusMenu(targetCell, 0, 0);
+          if (prevManual && todoStatusMenu) {
+            todoStatusMenuManualPosition = true;
+            todoStatusMenu.style.left = prevLeft;
+            todoStatusMenu.style.top = prevTop;
+            positionTodoStatusMenuWithinViewport();
+          }
+        } else {
+          closeTodoStatusMenu();
+        }
+        return;
+      }
       closeTodoStatusMenu();
     }
   });
 }
 if (todoGlobalStatusMenu) {
   todoGlobalStatusMenu.addEventListener("click", async (event) => {
+    event.stopPropagation();
     const target = event.target.closest("button");
     if (!target || !todoGlobalMenuTarget) return;
     const statusLabel = target.dataset.status;
@@ -9982,6 +11295,10 @@ window.addEventListener("resize", () => {
   updateTodoPanelHeaderOffset();
   repositionTodoStatusMenuToAnchor();
   repositionTodoGlobalStatusMenuToAnchor();
+});
+window.addEventListener("focus", refreshTodoVisualizationNow);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshTodoVisualizationNow();
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {

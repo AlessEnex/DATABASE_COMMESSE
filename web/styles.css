@@ -77,7 +77,7 @@ body.theme-dark {
 }
 
 .topbar .ghost,
-.topbar button,
+.topbar button.ghost,
 .topbar a.ghost {
   border: none;
   box-shadow: none;
@@ -359,7 +359,7 @@ body.theme-dark .topbar {
 }
 
 body.theme-dark .topbar .ghost,
-body.theme-dark .topbar button,
+body.theme-dark .topbar button.ghost,
 body.theme-dark .topbar a.ghost {
   color: #e3e7ee;
 }
@@ -701,7 +701,8 @@ body.theme-dark .calendar-card.calendar-elett {
 
 #matrixTitle,
 #calendarTitle,
-#reportTitle {
+#reportTitle,
+#todoTitle {
   cursor: pointer;
   user-select: none;
 }
@@ -2964,7 +2965,7 @@ body.theme-dark .report-commessa-link:hover {
 .todo-header-table-host {
   width: calc(100% + 16px);
   margin: 6px -8px 0;
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -2972,6 +2973,7 @@ body.theme-dark .report-commessa-link:hover {
   border-right: 0;
   border-radius: 0;
   background: #f9fbff;
+  overflow-anchor: none;
 }
 
 .todo-header h3 {
@@ -3010,6 +3012,7 @@ body.theme-dark .report-commessa-link:hover {
   overflow-x: auto;
   overflow-y: visible;
   background: #f9fbff;
+  overflow-anchor: none;
 }
 
 .todo-table {
@@ -3159,6 +3162,36 @@ body.theme-dark .report-commessa-link:hover {
   transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
 }
 
+.todo-status-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.todo-client-meta {
+  max-width: 100%;
+  font-size: 10px;
+  line-height: 1.2;
+  color: #6b7280;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.todo-client-meta-ok {
+  color: #1f5d3f;
+}
+
+.todo-client-meta-warn {
+  color: #7a5a00;
+}
+
+.todo-client-meta-danger {
+  color: #7f1d1d;
+}
+
 .todo-status:hover {
   transform: translateY(-1px);
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
@@ -3202,6 +3235,266 @@ body.theme-dark .report-commessa-link:hover {
   gap: 6px;
 }
 
+#todoStatusMenu.todo-status-menu {
+  min-width: 560px;
+  max-width: 760px;
+  padding: 10px;
+  gap: 8px;
+}
+
+#todoStatusMenu .todo-status-context {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#todoStatusMenu .todo-status-context-meta {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+#todoStatusMenu .todo-status-context-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#todoStatusMenu .todo-status-context-link {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+  text-decoration: none;
+  cursor: pointer;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#todoStatusMenu .todo-status-context-link:hover {
+  text-decoration: underline;
+}
+
+#todoStatusMenu .todo-status-context-matrix {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+#todoStatusMenu .todo-status-context-matrix.is-blocked {
+  opacity: 0.5;
+}
+
+#todoStatusMenu .todo-status-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#todoStatusMenu .todo-status-section-nav {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+#todoStatusMenu .todo-status-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+#todoStatusMenu .todo-status-section-note {
+  font-size: 12px;
+  color: var(--muted);
+  background: #eef3fb;
+  border: 1px dashed #c7d2e8;
+  border-radius: 8px;
+  padding: 7px 9px;
+  line-height: 1.35;
+}
+
+#todoStatusMenu .todo-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#todoStatusMenu .todo-status-section-nav .todo-status-row {
+  justify-content: flex-end;
+}
+
+#todoStatusMenu .todo-status-row button {
+  flex: 1 1 calc(50% - 6px);
+  text-align: center;
+}
+
+#todoStatusMenu .todo-status-btn-icon {
+  flex: 0 0 38px !important;
+  min-width: 38px;
+  padding: 6px;
+  font-size: 16px;
+  line-height: 1;
+  text-align: center;
+}
+
+#todoStatusMenu .todo-status-date-panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#todoStatusMenu .todo-status-date-dual,
+#todoStatusMenu .todo-status-date-confirm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+#todoStatusMenu .todo-status-date-dual {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 132px;
+  column-gap: 18px;
+  align-items: start;
+}
+
+#todoStatusMenu .todo-status-date-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+#todoStatusMenu .todo-status-date-subtitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+#todoStatusMenu .todo-status-date-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#todoStatusMenu .todo-status-date-head button {
+  flex: 0 0 32px;
+  min-width: 32px;
+  padding: 4px;
+  text-align: center;
+}
+
+#todoStatusMenu .todo-status-date-label {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  text-transform: capitalize;
+}
+
+#todoStatusMenu .todo-status-date-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+#todoStatusMenu .todo-status-date-counter {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #eef2f9;
+  padding: 10px 8px;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+#todoStatusMenu .todo-status-counter-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.45px;
+  color: var(--muted);
+  font-weight: 700;
+  text-align: center;
+}
+
+#todoStatusMenu .todo-status-counter-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  text-align: center;
+  line-height: 1.3;
+}
+
+#todoStatusMenu .todo-status-counter-value.is-warn {
+  color: #8a6500;
+}
+
+#todoStatusMenu .todo-status-counter-value.is-soon {
+  color: #c2410c;
+}
+
+#todoStatusMenu .todo-status-counter-value.is-future {
+  color: #a16207;
+}
+
+#todoStatusMenu .todo-status-counter-value.is-danger {
+  color: #9f1239;
+}
+
+@media (max-width: 900px) {
+  #todoStatusMenu.todo-status-menu {
+    min-width: min(94vw, 560px);
+  }
+
+  #todoStatusMenu .todo-status-date-dual {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+#todoStatusMenu .todo-status-date-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+#todoStatusMenu .todo-status-date-actions button {
+  flex: 0 0 auto;
+  min-width: 112px;
+  text-align: center;
+}
+
 .todo-status-menu button {
   border: none;
   background: #f3f6fb;
@@ -3222,6 +3515,46 @@ body.theme-dark .report-commessa-link:hover {
 .todo-status-menu button.active {
   background: #e0e9ff;
   color: #2b4b7c;
+}
+
+.todo-status-menu button.is-planned {
+  background: #e5f0ff;
+  color: #2b4b7c;
+  border: 1px solid #cddcff;
+}
+
+.todo-status-menu button.is-planned:hover:not(:disabled) {
+  background: #dce9ff;
+}
+
+.todo-status-menu button.is-client-sent {
+  background: #fff2e5;
+  color: #9a3412;
+  border: 1px solid #f6b98a;
+}
+
+.todo-status-menu button.is-client-sent:hover:not(:disabled) {
+  background: #ffe8d4;
+}
+
+.todo-status-menu button.is-success {
+  background: #e2f6e8;
+  color: #1f5c3a;
+  border: 1px solid #7cc59a;
+}
+
+.todo-status-menu button.is-success:hover:not(:disabled) {
+  background: #d5f0df;
+}
+
+.todo-status-menu button.is-not-needed {
+  background: #f6eaf6;
+  color: #6b2c6f;
+  border: 1px solid #e3cfe6;
+}
+
+.todo-status-menu button.is-not-needed:hover:not(:disabled) {
+  background: #f1e1f3;
 }
 
 .todo-status-menu button:disabled {
@@ -3293,10 +3626,125 @@ body.theme-dark .todo-status-menu {
   background: #0f172a;
 }
 
+body.theme-dark #todoStatusMenu .todo-status-section {
+  background: #111b2f;
+  border-color: #2a3a55;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-context {
+  background: #111b2f;
+  border-color: #2a3a55;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-context-meta {
+  color: #9fb0c8;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-context-link {
+  color: #dbe6f7;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-context-matrix {
+  border-color: #89b4ff;
+  color: #89b4ff;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-section-title {
+  color: #9fb0c8;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-section-note {
+  color: #b8c7db;
+  background: #0f172a;
+  border-color: #2a3a55;
+}
+
+body.theme-dark .todo-status-menu button.is-success {
+  background: #1f3b2c;
+  color: #9de3b8;
+  border-color: #3f8b63;
+}
+
+body.theme-dark .todo-status-menu button.is-planned {
+  background: #1a2d50;
+  color: #bfdbfe;
+  border-color: #4d79c8;
+}
+
+body.theme-dark .todo-status-menu button.is-client-sent {
+  background: #4a2c14;
+  color: #fdba74;
+  border-color: #b45309;
+}
+
+body.theme-dark .todo-status-menu button.is-not-needed {
+  background: #3b1f3f;
+  color: #e9d5ff;
+  border-color: #7e4a87;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-date-panel {
+  background: #111b2f;
+  border-color: #2a3a55;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-date-title {
+  color: #9fb0c8;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-date-subtitle {
+  color: #9fb0c8;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-date-label {
+  color: #dbe6f7;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-date-counter {
+  background: #0f172a;
+  border-color: #2a3a55;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-counter-value {
+  color: #dbe6f7;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-counter-value.is-warn {
+  color: #facc15;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-counter-value.is-soon {
+  color: #fdba74;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-counter-value.is-future {
+  color: #fde68a;
+}
+
+body.theme-dark #todoStatusMenu .todo-status-counter-value.is-danger {
+  color: #fca5a5;
+}
+
 body.theme-dark .todo-status.todo-da-schedulare {
   background: #4a3d16;
   color: #ffe9a3;
   border-color: #c9a84b;
+}
+
+body.theme-dark .todo-client-meta {
+  color: #94a3b8;
+}
+
+body.theme-dark .todo-client-meta-ok {
+  color: #86efac;
+}
+
+body.theme-dark .todo-client-meta-warn {
+  color: #facc15;
+}
+
+body.theme-dark .todo-client-meta-danger {
+  color: #fca5a5;
 }
 
 .todo-focus-overlay {
@@ -4338,13 +4786,36 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
 }
 
 .matrix-activity-bar.is-done::after {
-  content: "✓";
+  content: "\2713";
   position: absolute;
   top: 4px;
   right: 6px;
   font-size: 12px;
   font-weight: 700;
-  color: #ffffff;
+  color: #86efac;
+}
+
+.matrix-activity-bar.is-done.is-client-sent::after,
+.matrix-activity-bar.is-done.is-client-final::after {
+  right: 18px;
+}
+
+.matrix-activity-bar.is-done.is-client-sent::before,
+.matrix-activity-bar.is-done.is-client-final::before {
+  content: "\2713";
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.matrix-activity-bar.is-done.is-client-sent::before {
+  color: #fb923c;
+}
+
+.matrix-activity-bar.is-done.is-client-final::before {
+  color: #86efac;
 }
 
 .matrix-quick-menu {
@@ -4615,3 +5086,5 @@ body.theme-dark .matrix-switch input:checked + .matrix-switch-slider {
   background: var(--card);
   pointer-events: none;
 }
+
+

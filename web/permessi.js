@@ -125,6 +125,7 @@
       <li>In Gantt, admin, planner e responsabili possono modificare l'arrivo kit cavi.</li>
       <li>In Gantt, admin e responsabili possono modificare i T pianificati (azzurri/verdi).</li>
       <li>Quando il telaio e segnato come ordinato, il T pianificato resta bloccato.</li>
+      <li>To Dos (Preliminare CAD): admin, responsabile CAD e planner possono tracciare invio cliente, conferma e silenzio assenso.</li>
     `;
 
     permessiFrontendRules.appendChild(list);
