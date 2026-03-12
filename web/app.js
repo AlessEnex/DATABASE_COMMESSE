@@ -1729,7 +1729,7 @@ async function syncSignedIn(session) {
     debugLog("syncSignedIn step: loadProfile");
     const ok = await loadProfile(session.user);
     if (!ok || !state.profile) {
-      syncSignedOut();
+      syncSignedOut({ showStatus: false });
       return;
     }
     debugLog("syncSignedIn step: loadPermessi");
@@ -1760,7 +1760,8 @@ async function syncSignedIn(session) {
   }
 }
 
-function syncSignedOut() {
+function syncSignedOut(options = {}) {
+  const showStatus = options.showStatus !== false;
   debugLog("syncSignedOut");
   stopTodoVisualRefreshLoop();
   state.session = null;
@@ -1783,7 +1784,7 @@ function syncSignedOut() {
   clearSelection();
   calendarGrid.innerHTML = "";
   matrixGrid.innerHTML = "";
-  setStatus("Session ended.");
+  if (showStatus) setStatus("Session ended.");
 }
 
 function setAuthLoading(isLoading) {
@@ -11370,7 +11371,13 @@ supabase.auth.onAuthStateChange(async (event, session) => {
   if (session) {
     await syncSignedIn(session);
   } else {
-    syncSignedOut();
+    const hadSession = Boolean(state.session);
+    if (event === "SIGNED_OUT") {
+      syncSignedOut({ showStatus: hadSession });
+      return;
+    }
+    if (!hadSession) return;
+    syncSignedOut({ showStatus: true });
   }
 });
 
