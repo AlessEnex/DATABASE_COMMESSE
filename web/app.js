@@ -7399,18 +7399,28 @@ function refreshMatrixClientFlowIndicatorsForTarget(target) {
   });
 }
 
-function getTodoClientFlowEditBlockReason(titolo, repartoName = "") {
+function getTodoClientFlowEditBlockReason(commessaId, titolo, repartoName = "") {
   if (!isTodoClientFlowTracked(titolo, repartoName)) return "Tracking cliente non disponibile per questa attivita.";
   if (!state.canWrite) return "Permessi insufficienti.";
   const role = getTodoRole();
   if (role === "admin" || role === "planner") return "";
-  if (role !== "responsabile") return "Solo admin, responsabile e planner possono modificare il tracking cliente.";
-  const userDept = getProfileDeptKey();
-  const targetDept = normalizeDeptKey(repartoName || "");
-  if (!userDept || !targetDept || userDept !== targetDept) {
-    return "Responsabile: puoi modificare solo il tracking del tuo reparto.";
+  if (role === "responsabile") {
+    const userDept = getProfileDeptKey();
+    const targetDept = normalizeDeptKey(repartoName || "");
+    if (!userDept || !targetDept || userDept !== targetDept) {
+      return "Responsabile: puoi modificare solo il tracking del tuo reparto.";
+    }
+    return "";
   }
-  return "";
+  if (role === "operatore") {
+    const entries = getTodoEntriesForCell(commessaId, titolo, repartoName);
+    const editableEntries = getTodoEditableEntries(entries, repartoName);
+    if (!editableEntries.length) {
+      return "Operatore: puoi modificare il tracking cliente solo sulle task assegnate a te.";
+    }
+    return "";
+  }
+  return "Permessi insufficienti.";
 }
 
 function getDefaultClientFlowDueDate(sentAt) {
@@ -8317,7 +8327,7 @@ function openTodoStatusMenu(cell, x, y) {
   const canAccessClientFlow = isClientTracked && currentStatus === "fatta";
   const clientFlow = isClientTracked ? getTodoClientFlow(commessaId, titolo, reparto) : null;
   const clientFlowResolvedStatus = isClientTracked ? getTodoClientFlowResolvedStatus(clientFlow, startOfDay(new Date())) : "";
-  const clientFlowBlockReason = isClientTracked ? getTodoClientFlowEditBlockReason(titolo, reparto) : "";
+  const clientFlowBlockReason = isClientTracked ? getTodoClientFlowEditBlockReason(commessaId, titolo, reparto) : "";
   const statusActions =
     role === "operatore"
       ? [
@@ -8750,7 +8760,7 @@ async function applyTodoClientFlowAction(action, target, options = {}) {
     setStatus("Livello cliente disponibile solo quando l'attivita e DONE.", "error");
     return false;
   }
-  const blockReason = getTodoClientFlowEditBlockReason(target.titolo, target.reparto || "");
+  const blockReason = getTodoClientFlowEditBlockReason(target.commessaId, target.titolo, target.reparto || "");
   if (blockReason) {
     setStatus(blockReason, "error");
     return false;
