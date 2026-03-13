@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="it">
   <head>
     <meta charset="utf-8" />
@@ -49,12 +49,13 @@
                 </button>
                 <div id="topbarMenu" class="topbar-menu">
                   <a class="ghost nav-link" href="motore.html">Regole</a>
+                  <a id="reportsLink" class="ghost hidden" href="reports.html" target="_blank" rel="noopener">Reports</a>
                   <a id="permissionsLink" class="ghost hidden" href="permessi.html">Permessi</a>
                   <button id="openResourcesBtn" class="ghost hidden" type="button">Gestisci risorse</button>
                   <button id="openBackupBtn" class="ghost" type="button">Backup</button>
                 </div>
               </div>
-              <button id="themeToggleBtn" class="ghost" type="button" aria-label="Toggle theme" title="Toggle theme">🌕</button>
+              <button id="themeToggleBtn" class="ghost" type="button" aria-label="Toggle theme" title="Toggle theme">&#9789;</button>
               <button id="logoutBtn" class="ghost hidden link-btn">Log out</button>
             </div>
             <div id="authActions" class="auth-actions">
@@ -71,7 +72,7 @@
       <nav id="sectionToolbar" class="section-toolbar">
         <button class="ghost section-link" type="button" data-target="commessePanel">Commesse</button>
         <button class="ghost section-link" type="button" data-target="matrixPanel">Matrice risorse</button>
-        <button class="ghost section-link" type="button" data-target="calendarPanel">Calendario attività</button>
+        <button class="ghost section-link" type="button" data-target="calendarPanel">Calendario attivit&agrave;</button>
         <button class="ghost section-link" type="button" data-target="reportPanel">Pianificazione</button>
         <button class="ghost section-link" type="button" data-target="todoSection">To Dos</button>
       </nav>
@@ -131,11 +132,11 @@
                 <input id="matrixShiftToggle" type="checkbox" />
                 <span class="matrix-switch-slider"></span>
               </label>
-              <button id="matrixPrevBtn" class="ghost matrix-icon-btn" type="button">◀</button>
+              <button id="matrixPrevBtn" class="ghost matrix-icon-btn" type="button">&#9664;</button>
               <div class="matrix-control">
                 <input id="matrixDate" type="date" />
               </div>
-              <button id="matrixNextBtn" class="ghost matrix-icon-btn" type="button">▶</button>
+              <button id="matrixNextBtn" class="ghost matrix-icon-btn" type="button">&#9654;</button>
               <div class="matrix-control">
                 <button id="matrixTodayBtn" class="ghost matrix-flat-btn" type="button">Oggi</button>
               </div>
@@ -146,11 +147,14 @@
               </div>
               <div class="matrix-control">
                 <button id="matrixZoomOutBtn" class="ghost matrix-flat-btn matrix-icon-btn" type="button" aria-label="Zoom out">
-                  −
+                  &minus;
                 </button>
               </div>
               <div class="matrix-control">
                 <button id="matrixToggleListBtn" class="ghost matrix-flat-btn hidden" type="button">Comprimi lista</button>
+              </div>
+              <div class="matrix-control">
+                <button id="openProgressBtn" class="ghost matrix-flat-btn" type="button">Mostra avanzamento commesse</button>
               </div>
               <div class="matrix-control">
                 <select id="matrixCommessa" class="hidden"></select>
@@ -225,8 +229,13 @@
           <div id="matrixWrap" class="matrix-wrap">
             <div id="matrixCommessePanel" class="matrix-commesse">
               <div class="matrix-commesse-header">
-                <span>Commesse</span>
-                <input id="matrixCommessaSearch" type="text" placeholder="Cerca numero o descrizione" />
+                <div class="matrix-commesse-header-main">
+                  <span>Commesse</span>
+                  <input id="matrixCommessaSearch" type="text" placeholder="Cerca numero o descrizione" />
+                </div>
+                <div class="matrix-commesse-header-filters">
+                  <select id="matrixCommessaYear" aria-label="Filtro anno commesse"></select>
+                </div>
               </div>
               <div id="matrixCommesseList" class="matrix-commesse-list"></div>
               <div class="matrix-commesse-footer">
@@ -277,7 +286,6 @@
                 <button id="reportOrderDue" class="ghost report-toggle-btn active" type="button">Ordina in scadenza</button>
               </div>
               <div class="report-actions">
-                <button id="openProgressBtn" class="ghost" type="button">Mostra avanzamento commessa</button>
                 <button id="reportWorkloadBtn" class="ghost" type="button">Carico lavoro</button>
                 <button id="reportViewToggleBtn" class="ghost" type="button">Vista: Elenco</button>
                 <div id="matrixReportRange" class="mono"></div>
@@ -299,7 +307,7 @@
                   <option value="">Tutti gli anni</option>
                 </select>
                 <select id="todoPriorityField">
-                  <option value="">Priorità date: nessuna</option>
+                  <option value="">Priorit&agrave; date: nessuna</option>
                   <option value="telaio_target">Telaio target</option>
                   <option value="telaio_stimato">Telaio stimato</option>
                   <option value="prelievo">Prelievo</option>
@@ -307,7 +315,7 @@
                   <option value="consegna">Consegna</option>
                 </select>
                 <button id="todoPriorityBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
-                  Priorità: OFF
+                  Priorit&agrave;: OFF
                 </button>
                 <button id="todoSortBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
                   Ordine numero: OFF
@@ -396,9 +404,9 @@
     <div id="milestonePicker" class="milestone-picker hidden">
       <div id="milestoneTitle" class="milestone-title">Date picker</div>
       <div class="milestone-picker-header">
-        <button id="milestonePrevBtn" class="ghost" type="button">◀</button>
+        <button id="milestonePrevBtn" class="ghost" type="button">&#9664;</button>
         <div id="milestoneLabel" class="milestone-label"></div>
-        <button id="milestoneNextBtn" class="ghost" type="button">▶</button>
+        <button id="milestoneNextBtn" class="ghost" type="button">&#9654;</button>
       </div>
       <div class="milestone-weekdays">
         <span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span>
@@ -406,10 +414,10 @@
       <div id="milestoneDays" class="milestone-days"></div>
       <div class="milestone-actions">
         <button id="milestoneTransportVanBtn" class="ghost milestone-transport-btn" type="button" aria-label="Truck">
-          🚚
+          &#128666;
         </button>
         <button id="milestoneTransportShipBtn" class="ghost milestone-transport-btn" type="button" aria-label="Ship">
-          🚢
+          &#128674;
         </button>
         <button id="milestoneOrderBtn" class="ghost" type="button">Mark ordered</button>
         <button id="milestoneClearBtn" class="ghost" type="button">Svuota data</button>
@@ -471,14 +479,23 @@
                 Data ingresso
                 <input id="d_data_ingresso" type="date" />
               </label>
-              <label>
-                Ordine telaio target
-                <input id="d_data_ordine_telaio" type="date" />
-              </label>
-              <label>
-                Ordine telaio stimato
-                <input id="d_data_consegna_telaio_effettiva" type="date" />
-              </label>
+              <div class="detail-telaio-group">
+                <div class="detail-telaio-group-title">Telaio</div>
+                <label>
+                  Ordine telaio target
+                  <input id="d_data_ordine_telaio" type="date" />
+                </label>
+                <label>
+                  Data telaio ordinato
+                  <input id="d_data_consegna_telaio_effettiva" type="date" />
+                </label>
+                <label class="form-toggle-field">
+                  Stato telaio
+                  <button id="d_telaio_ordinato" class="telaio-toggle" type="button" aria-pressed="false">
+                    Telaio da ordinare
+                  </button>
+                </label>
+              </div>
               <label>
                 Arrivo kit cavi
                 <input id="d_data_arrivo_kit_cavi" type="date" />
@@ -486,12 +503,6 @@
               <label>
                 Prelievo materiali
                 <input id="d_data_prelievo_materiali" type="date" />
-              </label>
-              <label class="form-toggle-field">
-                Telaio
-                <button id="d_telaio_ordinato" class="telaio-toggle" type="button" aria-pressed="false">
-                  Telaio da ordinare
-                </button>
               </label>
               <label>
                 Consegna prevista
@@ -632,62 +643,88 @@
         <select id="matrixFilterYear" class="hidden">
           <option value="">Tutti gli anni</option>
         </select>
-        <input id="matrixFilterSearch" type="text" placeholder="Cerca..." />
+        <input id="matrixFilterNumero" class="hidden" type="number" min="0" step="1" placeholder="Numero commessa (esatto)" />
+        <input id="matrixFilterSearch" type="text" placeholder="Cerca codice o descrizione..." />
         <div id="matrixFilterList" class="checks"></div>
       </div>
     </div>
 
-    <div id="activityModal" class="modal hidden">
+        <div id="activityModal" class="modal hidden">
       <div class="modal-card">
-        <div class="modal-header">
-          <h3>Gestisci attivita</h3>
-          <div class="modal-header-actions">
-            <button id="activityGanttBtn" class="ghost activity-gantt-btn" type="button" title="Open gantt" aria-label="Open gantt">
-              <svg class="activity-gantt-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <line x1="4" y1="7" x2="18" y2="7"></line>
-                <line x1="4" y1="12" x2="14" y2="12"></line>
-                <line x1="4" y1="17" x2="20" y2="17"></line>
-              </svg>
-              <span class="activity-gantt-label">GO TO GANTT</span>
-            </button>
-            <button id="activityCloseBtn" class="ghost modal-close-btn" type="button" aria-label="Close">×</button>
-          </div>
-        </div>
-        <div id="activityMeta" class="modal-hint"></div>
-        <div class="activity-grid">
-          <div class="activity-left">
-            <div>
-              <div class="modal-hint">Attivita</div>
-              <div id="activityTitleList" class="checks"></div>
+        <div class="activity-dual-layout">
+          <div class="activity-dual-head">
+            <div class="activity-dual-head-main">
+              <h3>Gestione commessa</h3>
+              <div id="activityModalCommessaInfo" class="modal-hint"></div>
             </div>
-            <div id="activityAssenzaWrap" class="hidden">
-              <div class="modal-hint">Ore assenza</div>
-              <div class="quick-buttons">
-                <button id="activityAssenzaFullBtn" class="ghost" type="button">Giornata intera</button>
-                <button id="activityAssenzaHalfBtn" class="ghost" type="button">Mezza giornata</button>
+            <div class="modal-header-actions">
+              <button id="activityGanttBtn" class="ghost activity-gantt-btn" type="button" title="Open gantt" aria-label="Open gantt">
+                <svg class="activity-gantt-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <line x1="4" y1="7" x2="18" y2="7"></line>
+                  <line x1="4" y1="12" x2="14" y2="12"></line>
+                  <line x1="4" y1="17" x2="20" y2="17"></line>
+                </svg>
+                <span class="activity-gantt-label">GO TO GANTT</span>
+              </button>
+              <button id="activityCloseBtn" class="ghost modal-close-btn" type="button" aria-label="Close">×</button>
+            </div>
+          </div>
+          <div class="activity-dual-sections">
+            <section class="activity-main-panel">
+              <h4 class="activity-section-title">Gestisci attivita</h4>
+              <div id="activityMeta" class="modal-hint hidden"></div>
+              <div class="activity-grid">
+                <div class="activity-left">
+                  <div>
+                    <div class="modal-hint">Attivita</div>
+                    <div id="activityTitleList" class="checks"></div>
+                  </div>
+                  <div id="activityAssenzaWrap" class="hidden">
+                    <div class="modal-hint">Ore assenza</div>
+                    <div class="quick-buttons">
+                      <button id="activityAssenzaFullBtn" class="ghost" type="button">Giornata intera</button>
+                      <button id="activityAssenzaHalfBtn" class="ghost" type="button">Mezza giornata</button>
+                    </div>
+                    <input id="activityAssenzaOre" type="number" min="0" step="0.5" placeholder="Tot ore" />
+                  </div>
+                  <label>
+                    Amount orario (facoltativo)
+                    <div class="activity-hours-row">
+                      <div class="quick-buttons">
+                        <button id="activityHours1Btn" class="ghost" type="button">1h</button>
+                        <button id="activityHours4Btn" class="ghost" type="button">4h</button>
+                        <button id="activityHours8Btn" class="ghost" type="button">8h</button>
+                      </div>
+                      <input id="activityDurationInput" type="number" min="0" step="0.5" placeholder="Custom" />
+                    </div>
+                  </label>
+                </div>
+                <div class="activity-right">
+                  <label id="activityAltroNoteWrap" class="activity-note">
+                    Note
+                    <textarea id="activityAltroNote" rows="8" placeholder="Scrivi una nota..."></textarea>
+                  </label>
+                </div>
               </div>
-              <input id="activityAssenzaOre" type="number" min="0" step="0.5" placeholder="Tot ore" />
-            </div>
-            <label>
-              Durata (giorni)
-              <input id="activityDurationInput" type="number" min="1" step="1" />
-            </label>
+            </section>
+            <section class="activity-status-wrap">
+              <div id="matrixDualStatusHost" class="activity-status-panel">
+                <h4 class="activity-section-title">Status attivita</h4>
+                <div id="matrixDualStatusPlaceholder" class="activity-status-placeholder">
+                  Status disponibile dopo assegnazione attivita.
+                </div>
+              </div>
+            </section>
           </div>
-          <div class="activity-right">
-            <label id="activityAltroNoteWrap" class="activity-note">
-              Note
-              <textarea id="activityAltroNote" rows="8" placeholder="Scrivi una nota..."></textarea>
-            </label>
+          <div class="modal-actions activity-footer-actions">
+            <button id="activitySaveBtn" class="primary" type="button">Salva</button>
+            <button id="activityDeleteBtn" class="danger" type="button">Elimina attivita</button>
           </div>
-        </div>
-        <div class="modal-actions">
-          <button id="activityDeleteBtn" class="danger" type="button">Elimina attivita</button>
-          <button id="activitySaveBtn" class="primary" type="button">Salva durata</button>
         </div>
       </div>
     </div>
 
-    <div id="confirmModal" class="modal hidden">
+    <div id="confirmModal" class="modal hidden"> 
       <div class="modal-card">
         <div class="modal-header">
           <h3>Conferma</h3>
@@ -756,12 +793,18 @@
           </div>
           <input id="progressSearch" type="text" placeholder="Numeri o titolo (es. 12, 18)" />
         </div>
-        <div id="progressResults" class="progress-results"></div>
-        <div id="progressMeta" class="modal-hint"></div>
-        <div id="progressTimeline" class="progress-timeline">
-          <div class="progress-timeline-scroll">
-            <div id="progressTimelineDays" class="progress-timeline-days"></div>
-            <div id="progressList" class="progress-list"></div>
+        <div class="progress-layout">
+          <div class="progress-side">
+            <div id="progressResults" class="progress-results"></div>
+          </div>
+          <div class="progress-main">
+            <div id="progressMeta" class="modal-hint"></div>
+            <div id="progressTimeline" class="progress-timeline">
+              <div class="progress-timeline-scroll">
+                <div id="progressTimelineDays" class="progress-timeline-days"></div>
+                <div id="progressList" class="progress-list"></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -841,3 +884,4 @@
     <script src="app.js"></script>
   </body>
 </html>
+

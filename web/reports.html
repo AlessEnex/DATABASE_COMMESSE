@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reports - Commesse Live</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <style>
+      .reports-shell {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 12px;
+        display: grid;
+        gap: 10px;
+      }
+      .reports-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .reports-title {
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+      .reports-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+      .reports-card h3 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.2;
+      }
+      .reports-import summary {
+        cursor: pointer;
+        font-size: 16px;
+        font-weight: 600;
+        list-style: none;
+      }
+      .reports-import summary::-webkit-details-marker {
+        display: none;
+      }
+      .reports-import summary::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 8px;
+        border-right: 2px solid currentColor;
+        border-bottom: 2px solid currentColor;
+        transform: rotate(-45deg);
+        transition: transform 0.15s ease;
+      }
+      .reports-import[open] summary::before {
+        transform: rotate(45deg);
+      }
+      .reports-import-body {
+        display: grid;
+        gap: 8px;
+      }
+      .reports-main-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 260px;
+        gap: 10px;
+        align-items: start;
+      }
+      .reports-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+      }
+      .reports-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+      .reports-actions select {
+        min-width: 120px;
+      }
+      .reports-refresh-link {
+        border: none;
+        background: transparent;
+        color: var(--primary);
+        padding: 0;
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: underline;
+      }
+      .reports-refresh-link:hover {
+        color: #1f4ea3;
+      }
+      .reports-hint {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .reports-chart-wrap {
+        min-height: 320px;
+        position: relative;
+      }
+      .reports-data-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(250px, 300px);
+        gap: 8px;
+        align-items: start;
+      }
+      .reports-side-stack {
+        display: grid;
+        gap: 8px;
+        align-content: start;
+      }
+      #reportsPasteInput {
+        min-height: 110px;
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      .reports-week-list {
+        display: grid;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        max-height: 180px;
+        overflow: auto;
+      }
+      .reports-week-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 6px 8px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .reports-week-item:hover {
+        border-color: var(--primary);
+        background: #f7fbff;
+      }
+      .reports-week-item.active {
+        border-color: #79a6ff;
+        background: #edf5ff;
+      }
+      .reports-week-detail {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px;
+        display: grid;
+        gap: 4px;
+        max-height: 230px;
+        overflow: auto;
+      }
+      .reports-week-detail-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .reports-week-detail-title {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .reports-kpi-panel {
+        border: 1px solid var(--border);
+        background: var(--card);
+        border-radius: 10px;
+        padding: 8px;
+        display: grid;
+        gap: 6px;
+        position: sticky;
+        top: 8px;
+      }
+      .reports-kpi-title {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+      }
+      .reports-kpi-row {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 6px;
+        display: grid;
+        gap: 2px;
+      }
+      .reports-kpi-label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .reports-kpi-value {
+        font-size: 16px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      @media (max-width: 1200px) {
+        .reports-shell {
+          padding: 10px;
+        }
+        .reports-main-layout {
+          grid-template-columns: minmax(0, 1fr) 240px;
+        }
+      }
+      @media (max-width: 980px) {
+        .reports-main-layout {
+          grid-template-columns: 1fr;
+        }
+        .reports-kpi-panel {
+          position: static;
+        }
+        .reports-data-grid {
+          grid-template-columns: 1fr;
+        }
+        .reports-week-list,
+        .reports-week-detail {
+          max-height: none;
+        }
+      }
+      .reports-gate {
+        position: fixed;
+        inset: 0;
+        background: rgba(8, 11, 17, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+      .reports-gate-card {
+        width: min(460px, calc(100vw - 28px));
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 18px;
+        display: grid;
+        gap: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="reports-shell">
+      <div class="reports-topbar">
+        <div class="reports-title">Reports</div>
+      </div>
+
+      <details class="reports-card reports-import">
+        <summary>Import imponibili</summary>
+        <div class="reports-import-body">
+          <p class="reports-hint">
+            Incolla da Excel due colonne: <span class="mono">codice macchina</span> e <span class="mono">imponibile</span>.
+            Vengono aggiornati solo i codici macchina gia presenti nelle commesse.
+          </p>
+          <textarea
+            id="reportsPasteInput"
+            placeholder="A001	12345,67
+A002	8900"
+          ></textarea>
+          <div class="reports-actions">
+            <label>
+              Target settimanale (EUR)
+              <input id="reportsTargetInput" type="text" value="1000000" />
+            </label>
+            <button id="reportsImportBtn" class="primary" type="button">Importa da incolla</button>
+          </div>
+          <div id="reportsImportStatus" class="reports-hint">Incolla i dati e premi Importa.</div>
+        </div>
+      </details>
+
+      <div class="reports-main-layout">
+        <section class="reports-card">
+          <div class="reports-card-head">
+            <h3>Somma imponibili per settimana (solo telaio ordinato)</h3>
+            <button id="reportsRefreshBtn" class="reports-refresh-link" type="button">Aggiorna grafico</button>
+          </div>
+          <div class="reports-actions">
+            <label>
+              Anno
+              <select id="reportsYearFilter"></select>
+            </label>
+          </div>
+          <div class="reports-data-grid">
+            <div class="reports-chart-wrap">
+              <canvas id="reportsChart"></canvas>
+            </div>
+            <div class="reports-side-stack">
+              <ul id="reportsWeekList" class="reports-week-list"></ul>
+              <div id="reportsWeekDetail" class="reports-week-detail">
+                <div class="reports-week-detail-title">Clicca una settimana per vedere le commesse incluse.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside id="reportsKpiPanel" class="reports-kpi-panel">
+          <div class="reports-kpi-title">Indicatori periodo</div>
+          <div class="reports-kpi-row">
+            <div class="reports-kpi-label">Media kEUR / settimana</div>
+            <div id="kpiAvgWeek" class="reports-kpi-value">-</div>
+          </div>
+          <div class="reports-kpi-row">
+            <div class="reports-kpi-label">Macchine (telai ordinati)</div>
+            <div id="kpiMachines" class="reports-kpi-value">-</div>
+          </div>
+          <div class="reports-kpi-row">
+            <div class="reports-kpi-label">Media kEUR / macchina</div>
+            <div id="kpiAvgMachine" class="reports-kpi-value">-</div>
+          </div>
+          <div class="reports-kpi-row">
+            <div class="reports-kpi-label">Totale periodo</div>
+            <div id="kpiTotalEuro" class="reports-kpi-value">-</div>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <div id="reportsGate" class="reports-gate hidden">
+      <div class="reports-gate-card">
+        <h3 id="reportsGateTitle">Accesso richiesto</h3>
+        <div id="reportsGateText" class="reports-hint">Verifica permessi in corso...</div>
+      </div>
+    </div>
+
+    <script src="reports.js"></script>
+  </body>
+</html>

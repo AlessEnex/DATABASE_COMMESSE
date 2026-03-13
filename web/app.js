@@ -89,6 +89,7 @@ const resetWaitCloseBtn = el("resetWaitCloseBtn");
 const topbarMenu = el("topbarMenu");
 const topbarMenuToggle = el("topbarMenuToggle");
 const permissionsLink = el("permissionsLink");
+const reportsLink = el("reportsLink");
 
 const DEBUG_AUTH = new URLSearchParams(window.location.search).get("debug") === "1";
 let debugPanel = null;
@@ -195,8 +196,8 @@ function setTelaioOrdinatoButton(button, isOrdered, showFeedback = false, planne
   button.setAttribute("aria-pressed", isOrdered ? "true" : "false");
   button.textContent = isOrdered ? "Telaio ordinato" : "Telaio da ordinare";
   if (plannedInput) {
-    plannedInput.disabled = isOrdered;
-    plannedInput.title = isOrdered ? "Unmark frame ordered to edit the planned date." : "";
+    plannedInput.disabled = false;
+    plannedInput.title = "";
   }
   if (showFeedback) {
     setStatus(isOrdered ? "Frame marked as ordered." : "Frame marked as to-order.", "ok");
@@ -437,6 +438,7 @@ const matrixWrap = el("matrixWrap");
 const matrixCommessePanel = el("matrixCommessePanel");
 const matrixCommesseList = el("matrixCommesseList");
 const matrixCommessaSearch = el("matrixCommessaSearch");
+const matrixCommessaYear = el("matrixCommessaYear");
 const matrixAssenzaItem = el("matrixAssenzaItem");
 const matrixAltroItem = el("matrixAltroItem");
 const matrixPedItem = el("matrixPedItem");
@@ -445,6 +447,8 @@ const matrixOpOrdiniItem = el("matrixOpOrdiniItem");
 const commessaFocusOverlay = el("commessaFocusOverlay");
 const commessaQuickMenu = el("commessaQuickMenu");
 const commessaQuickSeeMoreBtn = el("commessaQuickSeeMoreBtn");
+const matrixDualStatusHost = el("matrixDualStatusHost");
+const matrixDualStatusPlaceholder = el("matrixDualStatusPlaceholder");
 const matrixReportGrid = el("matrixReportGrid");
 const matrixReportRange = el("matrixReportRange");
 const matrixReportSortBtn = el("matrixReportSortBtn");
@@ -475,14 +479,18 @@ const matrixFilterModal = el("matrixFilterModal");
 const matrixFilterTitle = el("matrixFilterTitle");
 const matrixFilterCloseBtn = el("matrixFilterCloseBtn");
 const matrixFilterYear = el("matrixFilterYear");
+const matrixFilterNumero = el("matrixFilterNumero");
 const matrixFilterSearch = el("matrixFilterSearch");
 const matrixFilterList = el("matrixFilterList");
 const matrixFilterClearBtn = el("matrixFilterClearBtn");
 const matrixFilterResetBtn = el("matrixFilterResetBtn");
 const matrixFilterApplyBtn = el("matrixFilterApplyBtn");
 const activityModal = el("activityModal");
+const activityModalCard = activityModal ? activityModal.querySelector(".modal-card") : null;
+const activityModalDragHandle = activityModal ? activityModal.querySelector(".activity-dual-head") : null;
 const activityCloseBtn = el("activityCloseBtn");
 const activityGanttBtn = el("activityGanttBtn");
+const activityModalCommessaInfo = el("activityModalCommessaInfo");
 const activityMeta = el("activityMeta");
 const activityTitleList = el("activityTitleList");
 const activityAssenzaWrap = el("activityAssenzaWrap");
@@ -492,6 +500,9 @@ const activityAssenzaHalfBtn = el("activityAssenzaHalfBtn");
 const activityAltroNoteWrap = el("activityAltroNoteWrap");
 const activityAltroNote = el("activityAltroNote");
 const activityDurationInput = el("activityDurationInput");
+const activityHours1Btn = el("activityHours1Btn");
+const activityHours4Btn = el("activityHours4Btn");
+const activityHours8Btn = el("activityHours8Btn");
 const activityDeleteBtn = el("activityDeleteBtn");
 const activitySaveBtn = el("activitySaveBtn");
 const confirmModal = el("confirmModal");
@@ -582,6 +593,7 @@ const matrixState = {
   autoShift: false,
   reportSort: "asc",
   collapsedReparti: new Set(),
+  customWeeks: null,
 };
 
 let commessaHighlightId = null;
@@ -593,6 +605,9 @@ let commessaQuickTarget = null;
 let commessaQuickTimer = null;
 let commessaQuickFocused = null;
 let quickMenuAttivita = null;
+let matrixDualPanelsActive = false;
+let activityModalDrag = null;
+const todoStatusMenuHomeParent = todoStatusMenu ? todoStatusMenu.parentElement : null;
 let confirmResolver = null;
 let confirmAction = null;
 let todoMenuTarget = null;
@@ -639,6 +654,7 @@ const BACKUP_TABLES = [
   { name: "attivita", conflict: "id" },
   { name: "commessa_attivita_override", conflict: "commessa_id,titolo" },
   { name: "commessa_attivita_cliente", conflict: "commessa_id,titolo,reparto" },
+  { name: "commessa_imponibili", conflict: "commessa_id" },
   { name: "whitelist_email", conflict: "email" },
   { name: "log_commessa", conflict: "id" },
 ];
@@ -703,6 +719,13 @@ function applyCommessaHighlight(commessaId) {
     bar.classList.toggle("commessa-highlight", same);
     bar.classList.toggle("commessa-dim", !same);
   });
+  const focusedRisorse = new Set();
+  matrixState.attivita.forEach((a) => {
+    if (String(a.commessa_id || "") !== String(commessaId)) return;
+    if (!a.risorsa_id) return;
+    focusedRisorse.add(String(a.risorsa_id));
+  });
+  applyMatrixResourceCompaction(focusedRisorse);
 }
 
 function updateMatrixCommessaPickerLabel() {
@@ -741,7 +764,64 @@ function clearCommessaHighlight() {
   bars.forEach((bar) => {
     bar.classList.remove("commessa-highlight", "commessa-dim");
   });
+  clearMatrixResourceCompaction();
   commessaHighlightId = null;
+  if (matrixState.selectedAttivita.size > 0) {
+    applyMatrixActivityFilterCompaction();
+  }
+}
+
+function clearMatrixResourceCompaction() {
+  if (!matrixGrid) return;
+  matrixGrid.querySelectorAll(".matrix-row-uninvolved").forEach((row) => {
+    row.classList.remove("matrix-row-uninvolved");
+  });
+  matrixGrid.querySelectorAll(".matrix-section-row-uninvolved").forEach((row) => {
+    row.classList.remove("matrix-section-row-uninvolved");
+  });
+}
+
+function applyMatrixResourceCompaction(involvedRisorse = new Set()) {
+  if (!matrixGrid) return;
+  matrixGrid.querySelectorAll(".matrix-row[data-risorsa-id]").forEach((row) => {
+    const risorsaId = String(row.dataset.risorsaId || "");
+    const involved = involvedRisorse.has(risorsaId);
+    row.classList.toggle("matrix-row-uninvolved", !involved);
+  });
+  const sectionRows = Array.from(matrixGrid.querySelectorAll(".matrix-section-row"));
+  sectionRows.forEach((section) => {
+    let hasInvolved = false;
+    let cursor = section.nextElementSibling;
+    while (cursor && !cursor.classList.contains("matrix-section-row")) {
+      if (
+        cursor.classList &&
+        cursor.classList.contains("matrix-row") &&
+        cursor.dataset.risorsaId &&
+        !cursor.classList.contains("matrix-row-uninvolved")
+      ) {
+        hasInvolved = true;
+        break;
+      }
+      cursor = cursor.nextElementSibling;
+    }
+    section.classList.toggle("matrix-section-row-uninvolved", !hasInvolved);
+  });
+}
+
+function applyMatrixActivityFilterCompaction() {
+  if (!matrixState.selectedAttivita.size) {
+    clearMatrixResourceCompaction();
+    return;
+  }
+  const involved = new Set();
+  const filterCommesse = matrixState.selectedCommesse.size > 0;
+  matrixState.attivita.forEach((a) => {
+    if (!matrixState.selectedAttivita.has(a.titolo)) return;
+    if (filterCommesse && !matrixState.selectedCommesse.has(a.commessa_id)) return;
+    if (!a.risorsa_id) return;
+    involved.add(String(a.risorsa_id));
+  });
+  applyMatrixResourceCompaction(involved);
 }
 
 function cancelCommessaHighlightTimer() {
@@ -961,9 +1041,14 @@ function openMatrixFilter(mode) {
   if (matrixFilterYear) {
     if (mode === "commessa") {
       const years = Array.from(
-        new Set(state.commesse.map((c) => getCommessaYear(c)).filter((y) => y))
+        new Set(
+          state.commesse
+            .map((c) => String(c.anno || getCommessaYear(c) || "").trim())
+            .filter((y) => /^\d{4}$/.test(y))
+        )
       ).sort((a, b) => b.localeCompare(a));
-      matrixFilterYear.innerHTML = `<option value="">Tutti gli anni</option>`;
+      matrixFilterYear.innerHTML = "";
+      if (!years.includes("2026")) years.unshift("2026");
       years.forEach((y) => {
         const opt = document.createElement("option");
         opt.value = y;
@@ -971,9 +1056,19 @@ function openMatrixFilter(mode) {
         matrixFilterYear.appendChild(opt);
       });
       matrixFilterYear.classList.remove("hidden");
+      matrixFilterYear.value = years.includes("2026") ? "2026" : years[0] || "";
     } else {
       matrixFilterYear.classList.add("hidden");
       matrixFilterYear.value = "";
+    }
+  }
+  if (matrixFilterNumero) {
+    if (mode === "commessa") {
+      matrixFilterNumero.classList.remove("hidden");
+      matrixFilterNumero.value = "";
+    } else {
+      matrixFilterNumero.classList.add("hidden");
+      matrixFilterNumero.value = "";
     }
   }
   renderMatrixFilterList();
@@ -992,6 +1087,8 @@ function renderMatrixFilterList() {
   matrixFilterList.innerHTML = "";
   if (matrixState.filterMode === "commessa") {
     const yearFilter = matrixFilterYear ? matrixFilterYear.value : "";
+    const numeroRaw = matrixFilterNumero ? matrixFilterNumero.value.trim() : "";
+    const numeroFilter = /^\d+$/.test(numeroRaw) ? Number.parseInt(numeroRaw, 10) : null;
     if (matrixFilterTitle) {
       const count = matrixState.selectedCommesse.size;
       if (count === 0) {
@@ -1005,12 +1102,24 @@ function renderMatrixFilterList() {
       }
     }
     const options = state.commesse.filter((c) => {
-      if (!q) return true;
-      const hay = `${c.codice} ${c.titolo || ""}`.toLowerCase();
-      return hay.includes(q);
+      if (numeroFilter != null) {
+        const parsed = parseCommessaCode(c.codice || "");
+        const cNum =
+          c.numero != null && Number.isFinite(Number(c.numero))
+            ? Number(c.numero)
+            : parsed.num != null && Number.isFinite(Number(parsed.num))
+            ? Number(parsed.num)
+            : NaN;
+        if (!Number.isFinite(cNum) || cNum !== numeroFilter) return false;
+      }
+      if (q) {
+        const hay = `${c.codice || ""} ${c.titolo || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
     });
     const filtered = (yearFilter
-      ? options.filter((c) => getCommessaYear(c) === yearFilter)
+      ? options.filter((c) => String(c.anno || getCommessaYear(c) || "") === yearFilter)
       : options
     ).slice().sort(compareCommesse);
     if (!filtered.length) {
@@ -1067,14 +1176,101 @@ function renderMatrixFilterList() {
   });
 }
 
-function applyMatrixFilter() {
+function getMatrixFilteredBoundsFromLoaded() {
+  const filterAttivita = matrixState.selectedAttivita.size > 0;
+  const filterCommesse = matrixState.selectedCommesse.size > 0;
+  const visible = (matrixState.attivita || []).filter((a) => {
+    if (filterAttivita && !matrixState.selectedAttivita.has(a.titolo)) return false;
+    if (filterCommesse && !matrixState.selectedCommesse.has(a.commessa_id)) return false;
+    return true;
+  });
+  if (!visible.length) return null;
+  let minStart = null;
+  let maxEnd = null;
+  visible.forEach((a) => {
+    const start = a.data_inizio ? new Date(a.data_inizio) : null;
+    const end = a.data_fine ? new Date(a.data_fine) : null;
+    if (start && !Number.isNaN(start.getTime())) {
+      if (!minStart || start < minStart) minStart = start;
+    }
+    if (end && !Number.isNaN(end.getTime())) {
+      if (!maxEnd || end > maxEnd) maxEnd = end;
+    }
+  });
+  if (!minStart || !maxEnd) return null;
+  return { minStart, maxEnd };
+}
+
+async function fitMatrixToFilteredActivities() {
+  if (!state.session || !matrixState.selectedAttivita.size) return;
+  const selectedTitles = Array.from(matrixState.selectedAttivita);
+  const selectedCommesse = Array.from(matrixState.selectedCommesse);
+  let minStart = null;
+  let maxEnd = null;
+  try {
+    let startQuery = supabase
+      .from("attivita")
+      .select("data_inizio")
+      .in("titolo", selectedTitles)
+      .order("data_inizio", { ascending: true })
+      .limit(1);
+    let endQuery = supabase
+      .from("attivita")
+      .select("data_fine")
+      .in("titolo", selectedTitles)
+      .order("data_fine", { ascending: false })
+      .limit(1);
+    if (selectedCommesse.length) {
+      startQuery = startQuery.in("commessa_id", selectedCommesse);
+      endQuery = endQuery.in("commessa_id", selectedCommesse);
+    }
+    const [startRes, endRes] = await Promise.all([
+      withTimeout(startQuery, FETCH_TIMEOUT_MS),
+      withTimeout(endQuery, FETCH_TIMEOUT_MS),
+    ]);
+    if (!startRes.error && startRes.data?.length) {
+      const d = new Date(startRes.data[0].data_inizio);
+      if (!Number.isNaN(d.getTime())) minStart = d;
+    }
+    if (!endRes.error && endRes.data?.length) {
+      const d = new Date(endRes.data[0].data_fine);
+      if (!Number.isNaN(d.getTime())) maxEnd = d;
+    }
+  } catch {
+    // fallback below
+  }
+  if (!minStart || !maxEnd) {
+    const fallback = getMatrixFilteredBoundsFromLoaded();
+    if (!fallback) return;
+    minStart = fallback.minStart;
+    maxEnd = fallback.maxEnd;
+  }
+  const fitStart = startOfWeek(minStart);
+  const fitEnd = endOfDay(maxEnd);
+  const totalDays = Math.max(1, Math.ceil((fitEnd.getTime() - fitStart.getTime() + 1) / (24 * 60 * 60 * 1000)));
+  const weeksNeeded = Math.max(1, Math.ceil(totalDays / 7));
+  matrixState.customWeeks = Math.min(52, weeksNeeded);
+  matrixState.date = fitStart;
+  if (matrixDate) matrixDate.value = formatDateInput(fitStart);
+}
+
+async function applyMatrixFilter() {
   if (matrixState.filterMode === "commessa") {
     setMatrixSelectedCommesse(Array.from(matrixState.filterDraft));
   } else if (matrixState.filterMode === "attivita") {
     matrixState.selectedAttivita = new Set(matrixState.filterDraft);
   }
-  renderMatrix();
   closeMatrixFilter();
+  if (matrixState.filterMode === "attivita") {
+    if (matrixState.selectedAttivita.size > 0) {
+      await fitMatrixToFilteredActivities();
+    } else {
+      matrixState.customWeeks = null;
+    }
+    await loadMatrixAttivita();
+    return;
+  }
+  renderMatrix();
 }
 
 function openActivityModal(attivita) {
@@ -1091,12 +1287,39 @@ function openActivityModal(attivita) {
     activityAssenzaOre.value = isAssente && attivita.ore_assenza != null ? String(attivita.ore_assenza) : "";
   }
   const commessaLabel = getCommessaLabel(attivita.commessa_id);
+  const commessa = attivita?.commessa_id
+    ? state.commesse.find((c) => String(c.id) === String(attivita.commessa_id))
+    : null;
+  if (activityModalCommessaInfo) {
+    if (commessa) {
+      const numero = Number.isFinite(Number(commessa.numero)) ? Number(commessa.numero) : commessa.numero || "-";
+      const anno = Number.isFinite(Number(commessa.anno)) ? Number(commessa.anno) : commessa.anno || "-";
+      const descrizione = String(commessa.titolo || "").trim();
+      activityModalCommessaInfo.textContent = descrizione
+        ? `Commessa ${numero} / ${anno} - ${descrizione}`
+        : `Commessa ${numero} / ${anno}`;
+    } else {
+      activityModalCommessaInfo.textContent = "Attivita senza commessa";
+    }
+  }
   const start = new Date(attivita.data_inizio);
-  const end = new Date(attivita.data_fine);
-  const durationDays = businessDaysBetweenInclusive(start, end);
-  activityDurationInput.value = String(durationDays);
+  activityDurationInput.value =
+    attivita.ore_stimate != null && !Number.isNaN(Number(attivita.ore_stimate))
+      ? String(Number(attivita.ore_stimate))
+      : "";
+  updateActivityQuickHourButtons();
+  const repartoName = getAttivitaRepartoName(attivita);
+  const currentTodoStatus =
+    attivita?.commessa_id && attivita?.titolo ? getTodoStatusFor(attivita.commessa_id, attivita.titolo, repartoName) : "";
+  const statoKey = normalizePhaseKey(attivita?.stato || "");
+  const isDoneStatus = currentTodoStatus === "fatta" || statoKey === "completata";
+  const canChangeActivityTitle = currentTodoStatus === "da_schedulare" && statoKey !== "pianificata" && statoKey !== "completata";
+  const changeBlockedReason = isDoneStatus
+    ? "Attivita in stato DONE: il titolo non e modificabile."
+    : "Il titolo attivita e modificabile solo in stato TO PLAN.";
   if (activityTitleList) {
     activityTitleList.innerHTML = "";
+    activityTitleList.title = canChangeActivityTitle ? "" : changeBlockedReason;
     const options = getMatrixAttivitaOptions();
     const allowed = options.filter((name) => isActivityAllowedForRisorsa(name, attivita.risorsa_id));
     const list = options.includes(attivita.titolo)
@@ -1104,23 +1327,25 @@ function openActivityModal(attivita) {
         ? allowed
         : [...allowed, attivita.titolo]
       : allowed;
-    list.forEach((name) => {
+    const orderedList = sortActivitiesByTodoOrder(list, repartoName);
+    orderedList.forEach((name) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "filter-pill";
       if (isLavenderActivity(name)) btn.classList.add("lavender-pill");
       btn.textContent = name;
       if (matrixState.editingTitles.has(name)) btn.classList.add("active");
+      if (!canChangeActivityTitle) {
+        btn.disabled = true;
+        btn.title = changeBlockedReason;
+      }
       btn.addEventListener("click", () => {
-        if (matrixState.editingTitles.has(name)) {
-          matrixState.editingTitles.delete(name);
-          btn.classList.remove("active");
-        } else {
-          matrixState.editingTitles.add(name);
-          btn.classList.add("active");
-        }
+        if (!canChangeActivityTitle) return;
+        matrixState.editingTitles = new Set([name]);
+        activityTitleList.querySelectorAll(".filter-pill.active").forEach((el) => el.classList.remove("active"));
+        btn.classList.add("active");
         if (activityAssenzaWrap && activityAssenzaOre) {
-          const hasAssente = Array.from(matrixState.editingTitles).some((t) => isAssenteTitle(t));
+          const hasAssente = isAssenteTitle(name);
           activityAssenzaWrap.classList.toggle("hidden", !hasAssente);
           if (!hasAssente) activityAssenzaOre.value = "";
         }
@@ -1135,9 +1360,156 @@ function openActivityModal(attivita) {
   activityDurationInput.focus();
 }
 
+function updateActivityQuickHourButtons() {
+  if (!activityDurationInput) return;
+  const raw = String(activityDurationInput.value || "").trim();
+  const value = raw === "" ? null : Number(raw);
+  const isMatch = (target) => value != null && Number.isFinite(value) && Math.abs(value - target) < 0.0001;
+  if (activityHours1Btn) activityHours1Btn.classList.toggle("active", isMatch(1));
+  if (activityHours4Btn) activityHours4Btn.classList.toggle("active", isMatch(4));
+  if (activityHours8Btn) activityHours8Btn.classList.toggle("active", isMatch(8));
+}
+
+function clampActivityModalPosition(left, top) {
+  if (!activityModalCard) return { left, top };
+  const rect = activityModalCard.getBoundingClientRect();
+  const pad = 8;
+  const maxLeft = Math.max(pad, window.innerWidth - rect.width - pad);
+  const maxTop = Math.max(pad, window.innerHeight - rect.height - pad);
+  return {
+    left: Math.min(maxLeft, Math.max(pad, left)),
+    top: Math.min(maxTop, Math.max(pad, top)),
+  };
+}
+
+function ensureActivityModalFixedPosition() {
+  if (!activityModalCard) return;
+  if (activityModalCard.style.position === "fixed") return;
+  const rect = activityModalCard.getBoundingClientRect();
+  activityModalCard.style.position = "fixed";
+  activityModalCard.style.left = `${rect.left}px`;
+  activityModalCard.style.top = `${rect.top}px`;
+  activityModalCard.style.margin = "0";
+}
+
+function resetActivityModalPosition() {
+  if (!activityModalCard) return;
+  activityModalCard.style.position = "";
+  activityModalCard.style.left = "";
+  activityModalCard.style.top = "";
+  activityModalCard.style.margin = "";
+}
+
+function stopActivityModalDrag(pointerId = null) {
+  if (!activityModalDrag) return;
+  if (pointerId != null && pointerId !== activityModalDrag.pointerId) return;
+  const dragPointerId = activityModalDrag.pointerId;
+  activityModalDrag = null;
+  if (activityModal) activityModal.classList.remove("is-dragging-modal");
+  if (activityModalDragHandle && typeof activityModalDragHandle.releasePointerCapture === "function") {
+    try {
+      activityModalDragHandle.releasePointerCapture(dragPointerId);
+    } catch {}
+  }
+}
+
+function startActivityModalDrag(event) {
+  if (!activityModal || !activityModalCard || !activityModalDragHandle) return;
+  if (activityModal.classList.contains("hidden")) return;
+  if (event.button !== 0) return;
+  if (event.target.closest("button, a, input, textarea, select, label")) return;
+  ensureActivityModalFixedPosition();
+  const rect = activityModalCard.getBoundingClientRect();
+  activityModalDrag = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  };
+  if (typeof activityModalDragHandle.setPointerCapture === "function") {
+    try {
+      activityModalDragHandle.setPointerCapture(event.pointerId);
+    } catch {}
+  }
+  if (activityModal) activityModal.classList.add("is-dragging-modal");
+}
+
+function moveActivityModalDrag(event) {
+  if (!activityModalDrag || !activityModalCard) return;
+  if (event.pointerId !== activityModalDrag.pointerId) return;
+  const rawLeft = event.clientX - activityModalDrag.offsetX;
+  const rawTop = event.clientY - activityModalDrag.offsetY;
+  const next = clampActivityModalPosition(rawLeft, rawTop);
+  activityModalCard.style.left = `${next.left}px`;
+  activityModalCard.style.top = `${next.top}px`;
+}
+
+function keepActivityModalInViewport() {
+  if (!activityModalCard || activityModalCard.style.position !== "fixed") return;
+  const left = Number.parseFloat(activityModalCard.style.left);
+  const top = Number.parseFloat(activityModalCard.style.top);
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+  const next = clampActivityModalPosition(left, top);
+  activityModalCard.style.left = `${next.left}px`;
+  activityModalCard.style.top = `${next.top}px`;
+}
+
+function positionMatrixDualStatusMenu() {
+  if (!matrixDualPanelsActive || !todoStatusMenu || !matrixDualStatusHost) return;
+  if (todoStatusMenu.parentElement !== matrixDualStatusHost) {
+    matrixDualStatusHost.appendChild(todoStatusMenu);
+  }
+}
+
+function mountTodoStatusMenuInDualHost() {
+  if (!todoStatusMenu || !matrixDualStatusHost) return;
+  todoStatusMenu.classList.add("matrix-side-by-side");
+  if (matrixDualStatusPlaceholder) matrixDualStatusPlaceholder.classList.add("hidden");
+  matrixDualStatusHost.appendChild(todoStatusMenu);
+}
+
+function unmountTodoStatusMenuFromDualHost(message = "") {
+  if (!todoStatusMenu) return;
+  todoStatusMenu.classList.remove("matrix-side-by-side");
+  todoStatusMenu.style.left = "";
+  todoStatusMenu.style.top = "";
+  if (todoStatusMenuHomeParent && todoStatusMenu.parentElement !== todoStatusMenuHomeParent) {
+    todoStatusMenuHomeParent.appendChild(todoStatusMenu);
+  }
+  if (matrixDualStatusPlaceholder) {
+    matrixDualStatusPlaceholder.textContent = message || "Status disponibile dopo assegnazione attivita.";
+    matrixDualStatusPlaceholder.classList.remove("hidden");
+  }
+}
+
+function openMatrixDualPanels(attivita, anchorEl) {
+  if (!attivita || !anchorEl) return;
+  matrixDualPanelsActive = true;
+  openActivityModal(attivita);
+  if (activityModal) activityModal.classList.add("matrix-dual-open");
+  if (!attivita.commessa_id || !attivita.titolo) {
+    unmountTodoStatusMenuFromDualHost("Status disponibile dopo assegnazione attivita.");
+    return;
+  }
+  mountTodoStatusMenuInDualHost();
+  openTodoStatusMenu(anchorEl, 0, 0);
+  if (todoStatusMenu && !todoStatusMenu.classList.contains("hidden")) {
+    positionMatrixDualStatusMenu();
+    return;
+  }
+  unmountTodoStatusMenuFromDualHost("Status non disponibile per questa attivita.");
+}
+
 function closeActivityModal() {
   if (!activityModal) return;
+  const shouldCloseStatus = matrixDualPanelsActive;
+  stopActivityModalDrag();
   activityModal.classList.add("hidden");
+  activityModal.classList.remove("matrix-dual-open");
+  activityModal.classList.remove("is-dragging-modal");
+  resetActivityModalPosition();
+  matrixDualPanelsActive = false;
+  unmountTodoStatusMenuFromDualHost();
+  if (shouldCloseStatus) closeTodoStatusMenu();
   matrixState.editingAttivita = null;
 }
 
@@ -1184,19 +1556,20 @@ function jumpToReportActivity(attivita) {
 async function saveActivityDuration() {
   const attivita = matrixState.editingAttivita;
   if (!attivita) return;
-  const days = Math.max(1, Number(activityDurationInput.value || 1));
+  const oreRaw = activityDurationInput ? String(activityDurationInput.value || "").trim() : "";
+  const oreStimate = oreRaw === "" ? null : Number(oreRaw);
+  if (oreRaw !== "" && (Number.isNaN(oreStimate) || oreStimate < 0)) {
+    setStatus("Le ore devono essere un numero valido (>= 0).", "error");
+    return;
+  }
   const titles = Array.from(matrixState.editingTitles);
   if (!titles.length) {
     setStatus("Select at least one activity.", "error");
     return;
   }
-  const hasAssente = titles.some((t) => isAssenteTitle(t));
-  if (hasAssente && titles.length > 1) {
-    setStatus("ASSENTE must be assigned alone.", "error");
-    return;
-  }
-  const notAllowed = titles.filter((t) => !isActivityAllowedForRisorsa(t, attivita.risorsa_id));
-  if (notAllowed.length) {
+  const firstTitle = titles[0];
+  const hasAssente = isAssenteTitle(firstTitle);
+  if (!isActivityAllowedForRisorsa(firstTitle, attivita.risorsa_id)) {
     setStatus("Some activities are not available for this department.", "error");
     return;
   }
@@ -1207,57 +1580,12 @@ async function saveActivityDuration() {
     setStatus("Enter absence hours.", "error");
     return;
   }
-  const start = new Date(attivita.data_inizio);
-  const end = new Date(attivita.data_fine);
-  const newEndDay = addBusinessDays(startOfDay(start), days - 1);
-  const newEnd = new Date(newEndDay);
-  newEnd.setHours(end.getHours(), end.getMinutes(), end.getSeconds(), end.getMilliseconds());
-  const oldEndDay = startOfDay(end);
-  const newEndDayValue = startOfDay(newEnd);
-  const deltaDays = businessDayDiff(oldEndDay, newEndDayValue);
-  const firstTitle = titles[0];
-  const keyForChain = isPhaseKey(firstTitle)
-    ? {
-        id: attivita.id,
-        commessa_id: isAssenteTitle(firstTitle) ? null : attivita.commessa_id,
-        titolo: firstTitle,
-        data_fine: attivita.data_fine,
-      }
-    : null;
-  let dependentActivities = null;
-  let dependentToShift = null;
-  if (matrixState.autoShift && keyForChain && deltaDays !== 0) {
-    dependentActivities = await getDependentActivitiesForKey(keyForChain);
-    if (dependentActivities == null) return;
-    dependentToShift = getDependentActivitiesToShift(keyForChain, deltaDays, dependentActivities);
-  }
-  const excludeIds =
-    keyForChain && dependentToShift && dependentToShift.length
-      ? [attivita.id, ...dependentToShift.map((a) => a.id)]
-      : [attivita.id];
-  if (matrixState.autoShift && deltaDays > 0) {
-    const extStart = addDays(oldEndDay, 1);
-    const overlap = await hasOverlapRange(attivita.risorsa_id, extStart, newEndDayValue, attivita.id);
-    if (overlap == null) return;
-    if (overlap) {
-      const ok = await shiftRisorsa(attivita.risorsa_id, extStart, deltaDays, excludeIds);
-      if (!ok) return;
-    }
-  } else if (matrixState.autoShift && deltaDays < 0) {
-    const cutDate = addDays(oldEndDay, 1);
-    const overlap = await hasOverlapRange(attivita.risorsa_id, cutDate, oldEndDay, attivita.id);
-    if (overlap == null) return;
-    if (overlap) {
-      const ok = await shiftRisorsa(attivita.risorsa_id, cutDate, deltaDays, excludeIds);
-      if (!ok) return;
-    }
-  }
   const { error: updError } = await supabase
     .from("attivita")
     .update({
-      data_fine: newEnd.toISOString(),
       titolo: firstTitle,
       descrizione: note || null,
+      ore_stimate: oreStimate,
       ore_assenza: isAssenteTitle(firstTitle) ? assenzaOre || null : null,
       commessa_id: isAssenteTitle(firstTitle) ? null : attivita.commessa_id,
     })
@@ -1266,29 +1594,7 @@ async function saveActivityDuration() {
     setStatus(`Update error: ${updError.message}`, "error");
     return;
   }
-  if (titles.length > 1) {
-    const rows = titles.slice(1).map((title) => ({
-      commessa_id: isAssenteTitle(title) ? null : attivita.commessa_id,
-      titolo: title,
-      descrizione: note || null,
-      ore_assenza: isAssenteTitle(title) ? assenzaOre || null : null,
-      risorsa_id: attivita.risorsa_id,
-      data_inizio: attivita.data_inizio,
-      data_fine: newEnd.toISOString(),
-      stato: attivita.stato,
-      reparto_id: attivita.reparto_id,
-    }));
-    const { error: insError } = await supabase.from("attivita").insert(rows);
-    if (insError) {
-      setStatus(`Create error: ${insError.message}`, "error");
-      return;
-    }
-  }
-  if (keyForChain && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
-    const ok = await shiftDependentPhases(keyForChain, deltaDays, dependentToShift);
-    if (!ok) return;
-  }
-  setStatus(titles.length > 1 ? "Activities updated." : "Activity updated.", "ok");
+  setStatus("Activity updated.", "ok");
   closeActivityModal();
   await loadMatrixAttivita();
 }
@@ -1420,9 +1726,10 @@ function closeResourcesModal() {
 function openProgressModal() {
   if (!progressModal) return;
   progressModal.classList.remove("hidden");
-  if (progressMeta) progressMeta.textContent = "Select a commessa.";
+  if (progressMeta) progressMeta.textContent = "Seleziona una o piu commesse.";
   if (progressList) progressList.innerHTML = "";
   if (progressResults) progressResults.innerHTML = "";
+  progressSelectedIds.clear();
   const currentYear = new Date().getFullYear();
   if (progressYearCurrent && progressYearPrev) {
     progressYearCurrent.dataset.year = String(currentYear);
@@ -1454,13 +1761,18 @@ function getSelectedProgressYear() {
 
 function renderProgressList(commessa, activities) {
   if (!progressList || !progressMeta) return;
-  if (!commessa) {
-    progressMeta.textContent = "Commessa non trovata.";
+  if (!commessa || (Array.isArray(commessa) && !commessa.length)) {
+    progressMeta.textContent = "Nessuna commessa selezionata.";
     progressList.innerHTML = "";
     if (progressTimelineDays) progressTimelineDays.innerHTML = "";
     return;
   }
-  progressMeta.textContent = `${commessa.codice}${commessa.titolo ? " - " + commessa.titolo : ""}`;
+  const selectedCommesse = Array.isArray(commessa) ? commessa : [commessa];
+  const selectedCodes = selectedCommesse.map((c) => c.codice || "").filter(Boolean);
+  progressMeta.textContent =
+    selectedCommesse.length === 1
+      ? `${selectedCommesse[0].codice}${selectedCommesse[0].titolo ? " - " + selectedCommesse[0].titolo : ""}`
+      : `${selectedCommesse.length} commesse selezionate: ${selectedCodes.join(", ")}`;
   if (!activities.length) {
     progressList.innerHTML = `<div class="matrix-empty">Nessuna attivita trovata.</div>`;
     if (progressTimelineDays) progressTimelineDays.innerHTML = "";
@@ -1501,45 +1813,69 @@ function renderProgressList(commessa, activities) {
       while (isWeekend(d)) d = addDays(d, direction);
       return d;
     };
-    const laneEnds = [];
+    const grouped = new Map();
     sorted.forEach((a) => {
-      const titleKey = (a.titolo || "").trim().toLowerCase();
-      const displayTitle =
-        titleKey === "altro" && a.descrizione ? `Altro: ${a.descrizione}` : a.titolo || "Attivita";
-      const color = colorForKey(a.titolo || "attivita");
-      const item = document.createElement("div");
-      item.className = "progress-item";
-      item.innerHTML = `
-        <div class="progress-color" style="--progress-color: ${color.border};"></div>
-        <div class="progress-body">
-          <div class="progress-title">${displayTitle}</div>
-          <div class="progress-meta">${risorseById.get(a.risorsa_id) || "Risorsa n/d"}</div>
-        </div>
-      `;
-      let startDay = normalizeToBusinessDay(a.data_inizio, 1);
-      let endDay = normalizeToBusinessDay(a.data_fine, -1);
-      if (endDay < startDay) endDay = startDay;
-      let startIndex = indexByKey.get(formatDateInput(startDay));
-      let endIndex = indexByKey.get(formatDateInput(endDay));
-      if (startIndex == null || endIndex == null) {
+      const key = a.progress_commessa_code || "Commessa n/d";
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(a);
+    });
+    const orderedGroups = selectedCommesse
+      .map((c) => c.codice || "Commessa n/d")
+      .filter((code) => grouped.has(code))
+      .concat(Array.from(grouped.keys()).filter((code) => !selectedCommesse.some((c) => (c.codice || "Commessa n/d") === code)));
+    const showGroupTitle = orderedGroups.length > 1;
+    let rowCursor = 1;
+    orderedGroups.forEach((groupCode) => {
+      const groupActivities = grouped.get(groupCode) || [];
+      if (!groupActivities.length) return;
+      if (showGroupTitle) {
+        const header = document.createElement("div");
+        header.className = "progress-group-title";
+        header.textContent = groupCode;
+        header.style.gridColumn = `1 / ${days.length + 1}`;
+        header.style.gridRow = `${rowCursor}`;
+        progressList.appendChild(header);
+        rowCursor += 1;
+      }
+      const laneEnds = [];
+      groupActivities.forEach((a) => {
+        const titleKey = (a.titolo || "").trim().toLowerCase();
+        const displayTitle =
+          titleKey === "altro" && a.descrizione ? `Altro: ${a.descrizione}` : a.titolo || "Attivita";
+        const color = colorForKey(a.titolo || "attivita");
+        const item = document.createElement("div");
+        item.className = "progress-item";
+        item.innerHTML = `
+          <div class="progress-color" style="--progress-color: ${color.border};"></div>
+          <div class="progress-body">
+            <div class="progress-title">${displayTitle}</div>
+            <div class="progress-meta">${risorseById.get(a.risorsa_id) || "Risorsa n/d"}</div>
+          </div>
+        `;
+        let startDay = normalizeToBusinessDay(a.data_inizio, 1);
+        let endDay = normalizeToBusinessDay(a.data_fine, -1);
+        if (endDay < startDay) endDay = startDay;
+        let startIndex = indexByKey.get(formatDateInput(startDay));
+        let endIndex = indexByKey.get(formatDateInput(endDay));
+        if (startIndex == null || endIndex == null) {
+          progressList.appendChild(item);
+          return;
+        }
+        if (endIndex < startIndex) {
+          const tmp = startIndex;
+          startIndex = endIndex;
+          endIndex = tmp;
+        }
+        let lane = 0;
+        while (lane < laneEnds.length && startIndex <= laneEnds[lane]) lane += 1;
+        if (lane === laneEnds.length) laneEnds.push(endIndex);
+        else laneEnds[lane] = endIndex;
+        item.style.gridColumn = `${startIndex + 1} / ${endIndex + 2}`;
+        item.style.gridRow = `${rowCursor + lane}`;
         progressList.appendChild(item);
-        return;
-      }
-      if (endIndex < startIndex) {
-        const tmp = startIndex;
-        startIndex = endIndex;
-        endIndex = tmp;
-      }
-      let lane = 0;
-      while (lane < laneEnds.length && startIndex <= laneEnds[lane]) lane += 1;
-      if (lane === laneEnds.length) {
-        laneEnds.push(endIndex);
-      } else {
-        laneEnds[lane] = endIndex;
-      }
-      item.style.gridColumn = `${startIndex + 1} / ${endIndex + 2}`;
-      item.style.gridRow = `${lane + 1}`;
-      progressList.appendChild(item);
+      });
+      rowCursor += Math.max(1, laneEnds.length);
+      if (showGroupTitle) rowCursor += 1;
     });
     return;
   }
@@ -1561,7 +1897,31 @@ function renderProgressList(commessa, activities) {
   });
 }
 
-let progressSelectedId = null;
+const progressSelectedIds = new Set();
+
+async function loadProgressForSelection() {
+  const ids = Array.from(progressSelectedIds);
+  if (!ids.length) {
+    renderProgressList([], []);
+    return;
+  }
+  const selectedCommesse = (state.commesse || []).filter((c) => ids.includes(c.id));
+  const { data, error } = await supabase
+    .from("attivita")
+    .select("*")
+    .in("commessa_id", ids)
+    .order("data_inizio", { ascending: true });
+  if (error) {
+    setStatus(`Progress error: ${error.message}`, "error");
+    return;
+  }
+  const codeById = new Map(selectedCommesse.map((c) => [String(c.id), c.codice || ""]));
+  const rows = (data || []).map((row) => ({
+    ...row,
+    progress_commessa_code: codeById.get(String(row.commessa_id || "")) || "",
+  }));
+  renderProgressList(selectedCommesse, rows);
+}
 
 function renderProgressResults() {
   if (!progressResults) return;
@@ -1617,22 +1977,14 @@ function renderProgressResults() {
       <div class="progress-result-title">${c.codice}${c.titolo ? " - " + c.titolo : ""}</div>
     `;
     btn.dataset.id = c.id;
-    if (progressSelectedId === c.id) btn.classList.add("active");
+    if (progressSelectedIds.has(c.id)) btn.classList.add("active");
     btn.addEventListener("click", async () => {
-      progressSelectedId = c.id;
-      Array.from(progressResults.querySelectorAll(".progress-result")).forEach((el) =>
-        el.classList.toggle("active", el.dataset.id === String(c.id))
-      );
-      const { data, error } = await supabase
-        .from("attivita")
-        .select("*")
-        .eq("commessa_id", c.id)
-        .order("data_inizio", { ascending: true });
-      if (error) {
-        setStatus(`Progress error: ${error.message}`, "error");
-        return;
-      }
-      renderProgressList(c, data || []);
+      if (progressSelectedIds.has(c.id)) progressSelectedIds.delete(c.id);
+      else progressSelectedIds.add(c.id);
+      Array.from(progressResults.querySelectorAll(".progress-result")).forEach((el) => {
+        el.classList.toggle("active", progressSelectedIds.has(el.dataset.id));
+      });
+      await loadProgressForSelection();
     });
     progressResults.appendChild(btn);
   });
@@ -1776,6 +2128,7 @@ function syncSignedOut(options = {}) {
   if (setPasswordBtn) setPasswordBtn.classList.add("hidden");
   if (openResourcesBtn) openResourcesBtn.classList.add("hidden");
   if (permissionsLink) permissionsLink.classList.add("hidden");
+  if (reportsLink) reportsLink.classList.add("hidden");
   if (authActions) authActions.classList.remove("is-authenticated");
   if (authDot) authDot.classList.add("hidden");
   setRoleBadge("");
@@ -3765,6 +4118,29 @@ function weekDaysForView(baseDate, view) {
   return weekdayDates(start);
 }
 
+function getMatrixDefaultWeeks(view = matrixState.view) {
+  if (view === "six") return 6;
+  if (view === "three") return 3;
+  if (view === "two") return 2;
+  return 1;
+}
+
+function getMatrixWeeks() {
+  const custom = Number(matrixState.customWeeks || 0);
+  if (Number.isFinite(custom) && custom > 0) return Math.max(1, Math.round(custom));
+  return getMatrixDefaultWeeks(matrixState.view);
+}
+
+function weekDaysForMatrix(baseDate) {
+  const start = startOfWeek(baseDate);
+  const weeks = getMatrixWeeks();
+  const days = [];
+  for (let i = 0; i < weeks; i += 1) {
+    days.push(...weekdayDates(addDays(start, i * 7)));
+  }
+  return days;
+}
+
 function endOfDay(date) {
   const d = new Date(date);
   d.setHours(23, 59, 59, 999);
@@ -4327,13 +4703,8 @@ function getMilestoneDragInfo(drag, clientX) {
 
 function getMatrixRange() {
   const start = startOfWeek(matrixState.date);
-  const end = matrixState.view === "six"
-    ? endOfDay(addDays(start, 41))
-    : matrixState.view === "three"
-    ? endOfDay(addDays(start, 20))
-    : matrixState.view === "two"
-    ? endOfDay(addDays(start, 13))
-    : endOfDay(addDays(start, 6));
+  const weeks = getMatrixWeeks();
+  const end = endOfDay(addDays(start, weeks * 7 - 1));
   return { start, end };
 }
 
@@ -4409,6 +4780,16 @@ function getRisorsaDeptName(risorsaId) {
   return reparto ? reparto.nome : "";
 }
 
+function getAttivitaRepartoName(attivita) {
+  if (!attivita) return "";
+  if (attivita.risorsa_id) return getRisorsaDeptName(attivita.risorsa_id);
+  if (attivita.reparto_id != null) {
+    const reparto = (state.reparti || []).find((rep) => String(rep.id) === String(attivita.reparto_id));
+    return reparto ? reparto.nome : "";
+  }
+  return "";
+}
+
 function isActivityAllowedForRisorsa(title, risorsaId) {
   if (isAssenteTitle(title)) return true;
   const key = normalizePhaseKey(title);
@@ -4457,6 +4838,39 @@ function getTodoActivityCatalog() {
     unique.push(name);
   });
   return unique;
+}
+
+const TODO_ACTIVITY_PRIMARY_PHASE_KEY = "progettazione termodinamica";
+const TODO_CAD_ACTIVITY_ORDER_KEYS = [
+  "preliminare",
+  "3d",
+  "carenatura",
+  "telaio",
+  "costruttivi 1-5",
+  "consegna totale",
+];
+
+function sortActivitiesByTodoOrder(names, repartoName = "") {
+  const list = Array.isArray(names) ? names.slice() : [];
+  const deptKey = normalizeDeptKey(repartoName || "");
+  if (deptKey.includes("CAD")) {
+    return list.sort((a, b) => {
+      const aKey = normalizePhaseKey(a);
+      const bKey = normalizePhaseKey(b);
+      const aIdx = TODO_CAD_ACTIVITY_ORDER_KEYS.indexOf(aKey);
+      const bIdx = TODO_CAD_ACTIVITY_ORDER_KEYS.indexOf(bKey);
+      const aRank = aIdx >= 0 ? aIdx : Number.MAX_SAFE_INTEGER;
+      const bRank = bIdx >= 0 ? bIdx : Number.MAX_SAFE_INTEGER;
+      if (aRank !== bRank) return aRank - bRank;
+      return String(a || "").localeCompare(String(b || ""));
+    });
+  }
+  return list.sort((a, b) => {
+    const aTarget = normalizePhaseKey(a) === TODO_ACTIVITY_PRIMARY_PHASE_KEY ? 0 : 1;
+    const bTarget = normalizePhaseKey(b) === TODO_ACTIVITY_PRIMARY_PHASE_KEY ? 0 : 1;
+    if (aTarget !== bTarget) return aTarget - bTarget;
+    return String(a || "").localeCompare(String(b || ""));
+  });
 }
 
 function getTodoActivityGroups() {
@@ -5896,6 +6310,11 @@ async function loadProfile(userFromSession = null) {
     if (role) permissionsLink.classList.remove("hidden");
     else permissionsLink.classList.add("hidden");
   }
+  if (reportsLink) {
+    const role = String(data.ruolo || "").trim().toLowerCase();
+    if (role === "admin") reportsLink.classList.remove("hidden");
+    else reportsLink.classList.add("hidden");
+  }
   setWriteAccess(data.ruolo !== "viewer");
   authStatus.textContent = `Connesso come ${data.email}`;
   logoutBtn.classList.remove("hidden");
@@ -6057,6 +6476,7 @@ async function loadCommesse() {
   renderTodoYearFilter();
   applyFilters();
   renderMatrixCommesse();
+  renderMatrixCommesseYearFilter();
   renderMatrixCommesseColumn();
   renderMatrixReport();
   if (state.selected) {
@@ -6158,6 +6578,7 @@ function setupMatrixPan(headerRow) {
       const currentIndex = Math.max(0, views.indexOf(matrixState.view));
       const nextIndex = Math.min(views.length - 1, Math.max(0, currentIndex + zoomSteps));
       matrixState.view = views[nextIndex];
+      matrixState.customWeeks = null;
       matrixState.date = startOfWeek(matrixState.date);
       setMatrixViewLabel();
       await loadMatrixAttivita();
@@ -6189,10 +6610,34 @@ function renderMatrixCommesse() {
   });
 }
 
+function renderMatrixCommesseYearFilter() {
+  if (!matrixCommessaYear) return;
+  const currentYear = String(new Date().getFullYear());
+  const years = Array.from(
+    new Set(
+      (state.commesse || [])
+        .map((c) => Number(c.anno))
+        .filter((y) => Number.isFinite(y) && y > 0)
+    )
+  ).sort((a, b) => b - a);
+  if (!years.includes(Number(currentYear))) years.unshift(Number(currentYear));
+  const prev = matrixCommessaYear.value;
+  matrixCommessaYear.innerHTML = "";
+  years.forEach((year) => {
+    const opt = document.createElement("option");
+    opt.value = String(year);
+    opt.textContent = String(year);
+    matrixCommessaYear.appendChild(opt);
+  });
+  matrixCommessaYear.value = prev && years.includes(Number(prev)) ? prev : currentYear;
+}
+
 function renderMatrixCommesseColumn() {
   if (!matrixCommesseList) return;
   const q = (matrixCommessaSearch.value || "").trim().toLowerCase();
+  const year = matrixCommessaYear ? Number(matrixCommessaYear.value || 0) : 0;
   const items = state.commesse.filter((c) => {
+    if (year && Number(c.anno) !== year) return false;
     if (!q) return true;
     const code = String(c.codice || "").toLowerCase();
     const titolo = String(c.titolo || "").toLowerCase();
@@ -6259,6 +6704,24 @@ function renderAssignActivities() {
   }
 }
 
+function getActivityEstimatedHours(attivita) {
+  const est = Number(attivita?.ore_stimate);
+  if (Number.isFinite(est) && est > 0) return est;
+  const assenza = Number(attivita?.ore_assenza);
+  if (Number.isFinite(assenza) && assenza > 0) return assenza;
+  return 0;
+}
+
+function getActivityEstimatedHoursPerDay(attivita) {
+  const total = getActivityEstimatedHours(attivita);
+  if (!total) return 0;
+  const start = attivita?.data_inizio ? startOfDay(new Date(attivita.data_inizio)) : null;
+  const end = attivita?.data_fine ? startOfDay(new Date(attivita.data_fine)) : null;
+  if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return total;
+  const businessDays = Math.max(1, businessDaysBetweenInclusive(start, end));
+  return total / businessDays;
+}
+
 function renderMatrix() {
   if (!matrixGrid) return;
   if (!state.session) {
@@ -6272,7 +6735,7 @@ function renderMatrix() {
   if (matrixPanel && matrixPanelHeader) {
     matrixPanel.style.setProperty("--matrix-panel-header-height", `${matrixPanelHeader.offsetHeight}px`);
   }
-  const days = weekDaysForView(matrixState.date, matrixState.view);
+  const days = weekDaysForMatrix(matrixState.date);
   renderMatrixHeader(days);
 
   if (!matrixState.risorse.length) {
@@ -6336,6 +6799,7 @@ function renderMatrix() {
     groups.get(label).forEach((r) => {
       const row = document.createElement("div");
       row.className = "matrix-row";
+      row.dataset.risorsaId = String(r.id);
       row.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
       row.style.position = "relative";
 
@@ -6358,13 +6822,18 @@ function renderMatrix() {
     });
 
     const occupiedDays = new Set();
+    const dayHours = new Map();
     visibleActivities.forEach((a) => {
       const start = startOfDay(new Date(a.data_inizio));
       const end = startOfDay(new Date(a.data_fine));
+      const hoursPerDay = getActivityEstimatedHoursPerDay(a);
       let current = new Date(start);
       while (current <= end) {
         const key = formatDateLocal(current);
-        if (dayIndex.has(key)) occupiedDays.add(key);
+        if (dayIndex.has(key)) {
+          occupiedDays.add(key);
+          if (hoursPerDay > 0) dayHours.set(key, (dayHours.get(key) || 0) + hoursPerDay);
+        }
         current = addDays(current, 1);
       }
     });
@@ -6384,6 +6853,11 @@ function renderMatrix() {
 
       if (!occupiedDays.has(dayKey)) {
         // leave empty cell without placeholder
+      }
+      const totalHours = dayHours.get(dayKey) || 0;
+      if (totalHours > 9) {
+        cell.classList.add("overbooked-hours");
+        cell.title = `${totalHours.toFixed(1)}h pianificate`;
       }
 
       cell.addEventListener("dragover", (e) => {
@@ -6592,8 +7066,12 @@ function renderMatrix() {
           if (matrixState.draggingId) return;
           closeTodoStatusMenu();
           closeTodoGlobalStatusMenu();
-          clearCommessaHighlight();
-          openActivityModal(b.a);
+          if (b.a.commessa_id) {
+            applyCommessaHighlight(b.a.commessa_id);
+            commessaLongPressSuppress = true;
+          } else {
+            clearCommessaHighlight();
+          }
           matrixState.suppressClickUntil = Date.now() + 600;
         }, 450);
       });
@@ -6627,12 +7105,14 @@ function renderMatrix() {
         }
         closeMatrixQuickMenu();
         clearCommessaHighlight();
-        if (!b.a.commessa_id || !b.a.titolo) {
+        if (!b.a.titolo) {
           openActivityModal(b.a);
           return;
         }
-        mergeReportActivitiesFromMatrix(b.a.commessa_id);
-        openTodoStatusMenu(bar, e.clientX, e.clientY);
+        if (b.a.commessa_id) {
+          mergeReportActivitiesFromMatrix(b.a.commessa_id);
+        }
+        openMatrixDualPanels(b.a, bar);
       });
       const handle = document.createElement("span");
       handle.className = "matrix-resize-handle";
@@ -6694,6 +7174,13 @@ function renderMatrix() {
       matrixGrid.appendChild(row);
     });
   });
+  if (commessaHighlightId) {
+    applyCommessaHighlight(commessaHighlightId);
+  } else if (matrixState.selectedAttivita.size > 0) {
+    applyMatrixActivityFilterCompaction();
+  } else {
+    clearMatrixResourceCompaction();
+  }
 }
 
 function renderMatrixReport() {
@@ -7243,6 +7730,7 @@ function buildTodoClientFlowKey(commessaId, titolo, repartoName = "") {
 }
 
 const TODO_CLIENT_FLOW_TRACKED_TITLES = new Set(["preliminare", "3d"]);
+const TODO_TELAIO_ORDER_TRACKED_TITLES = new Set(["telaio"]);
 
 function isTodoClientFlowTracked(titolo, repartoName = "") {
   const titleKey = normalizePhaseKey(titolo || "");
@@ -7250,9 +7738,20 @@ function isTodoClientFlowTracked(titolo, repartoName = "") {
   return TODO_CLIENT_FLOW_TRACKED_TITLES.has(titleKey) && deptKey.includes("CAD");
 }
 
+function isTodoTelaioOrderTracked(titolo, repartoName = "") {
+  const titleKey = normalizePhaseKey(titolo || "");
+  const deptKey = normalizeDeptKey(repartoName || "");
+  return TODO_TELAIO_ORDER_TRACKED_TITLES.has(titleKey) && deptKey.includes("CAD");
+}
+
 function getTodoClientFlowSectionTitle(titolo = "") {
   const cleanTitle = String(titolo || "").trim();
   return cleanTitle ? `Cliente ${cleanTitle}` : "Cliente";
+}
+
+function getTodoTelaioOrderSectionTitle(titolo = "") {
+  const cleanTitle = String(titolo || "").trim();
+  return cleanTitle ? `Ordine ${cleanTitle}` : "Ordine telaio";
 }
 
 function parseIsoDateOnly(value) {
@@ -7422,6 +7921,35 @@ function getTodoClientFlowEditBlockReason(commessaId, titolo, repartoName = "") 
     return "";
   }
   return "Permessi insufficienti.";
+}
+
+function getTodoTelaioOrderEditBlockReason(commessaId, titolo, repartoName = "") {
+  if (!isTodoTelaioOrderTracked(titolo, repartoName)) return "Data ordine non disponibile per questa attivita.";
+  if (!state.canWrite) return "Permessi insufficienti.";
+  const role = getTodoRole();
+  if (role !== "admin" && role !== "responsabile") {
+    return "Solo admin o responsabile possono registrare la data ordine telaio.";
+  }
+  if (role === "responsabile") {
+    const userDept = getProfileDeptKey();
+    const targetDept = normalizeDeptKey(repartoName || "");
+    if (!userDept || !targetDept || userDept !== targetDept) {
+      return "Responsabile: puoi modificare solo il tracking del tuo reparto.";
+    }
+  }
+  const entries = getTodoEntriesForCell(commessaId, titolo, repartoName);
+  if (!entries.length) return "Nessuna attivita valida trovata.";
+  return "";
+}
+
+function getTodoTelaioOrderedDate(commessaId) {
+  if (!commessaId) return null;
+  const key = String(commessaId);
+  const commessa =
+    (state.commesse || []).find((c) => String(c.id) === key) ||
+    (todoLastRendered || []).find((c) => String(c.id) === key) ||
+    null;
+  return parseIsoDateOnly(commessa?.data_consegna_telaio_effettiva || null);
 }
 
 function getDefaultClientFlowDueDate(sentAt) {
@@ -7748,45 +8276,14 @@ function renderTodoSection(commesse) {
     todoGrid.innerHTML = `<div class="report-empty">Nessuna attivita disponibile.</div>`;
     return;
   }
-  const targetPhaseKey = "progettazione termodinamica";
-  const cadOrderKeys = [
-    "preliminare",
-    "3d",
-    "carenatura",
-    "telaio",
-    "costruttivi 1-5",
-    "consegna totale",
-  ];
-  const orderActivitiesForGroup = (group) => {
-    const deptKey = normalizeDeptKey(group?.reparto || "");
-    const list = (group?.attivita || []).slice();
-    if (deptKey.includes("CAD")) {
-      return list.sort((a, b) => {
-        const aKey = normalizePhaseKey(a);
-        const bKey = normalizePhaseKey(b);
-        const aIdx = cadOrderKeys.indexOf(aKey);
-        const bIdx = cadOrderKeys.indexOf(bKey);
-        const aRank = aIdx >= 0 ? aIdx : Number.MAX_SAFE_INTEGER;
-        const bRank = bIdx >= 0 ? bIdx : Number.MAX_SAFE_INTEGER;
-        if (aRank !== bRank) return aRank - bRank;
-        return String(a || "").localeCompare(String(b || ""));
-      });
-    }
-    return list.sort((a, b) => {
-      const aTarget = normalizePhaseKey(a) === targetPhaseKey ? 0 : 1;
-      const bTarget = normalizePhaseKey(b) === targetPhaseKey ? 0 : 1;
-      if (aTarget !== bTarget) return aTarget - bTarget;
-      return String(a || "").localeCompare(String(b || ""));
-    });
-  };
   const orderedGroups = groups
     .map((group) => ({
       ...group,
-      attivita: orderActivitiesForGroup(group),
+      attivita: sortActivitiesByTodoOrder(group?.attivita || [], group?.reparto || ""),
     }))
     .sort((a, b) => {
-      const aHas = (a.attivita || []).some((name) => normalizePhaseKey(name) === targetPhaseKey);
-      const bHas = (b.attivita || []).some((name) => normalizePhaseKey(name) === targetPhaseKey);
+      const aHas = (a.attivita || []).some((name) => normalizePhaseKey(name) === TODO_ACTIVITY_PRIMARY_PHASE_KEY);
+      const bHas = (b.attivita || []).some((name) => normalizePhaseKey(name) === TODO_ACTIVITY_PRIMARY_PHASE_KEY);
       if (aHas !== bHas) return aHas ? -1 : 1;
       return String(a.reparto || "").localeCompare(String(b.reparto || ""));
     });
@@ -8073,6 +8570,7 @@ function renderTodoStatusDatePicker() {
   const applyBtn = panel.querySelector('button[data-action="todo_date_apply"]');
   const dualWrap = panel.querySelector(".todo-status-date-dual");
   const confirmWrap = panel.querySelector(".todo-status-date-confirm");
+  const confirmSubtitle = panel.querySelector('.todo-status-date-confirm .todo-status-date-subtitle');
   if (!title || !dualWrap || !confirmWrap) return;
 
   const renderCalendar = (field, monthInput, selectedInput) => {
@@ -8144,8 +8642,22 @@ function renderTodoStatusDatePicker() {
   }
 
   const isSilenceDecision = todoStatusDatePickerState.action === "client_silence";
-  title.textContent = isSilenceDecision ? "Data decisione silenzio assenso" : "Data conferma cliente";
-  if (applyBtn) applyBtn.textContent = isSilenceDecision ? "Conferma silenzio assenso" : "Conferma data";
+  const isTelaioOrdered = todoStatusDatePickerState.action === "telaio_ordered";
+  title.textContent = isTelaioOrdered
+    ? "Data ordine telaio"
+    : isSilenceDecision
+    ? "Data decisione silenzio assenso"
+    : "Data conferma cliente";
+  if (applyBtn) {
+    applyBtn.textContent = isTelaioOrdered
+      ? "Conferma ordine"
+      : isSilenceDecision
+      ? "Conferma silenzio assenso"
+      : "Conferma data";
+  }
+  if (confirmSubtitle) {
+    confirmSubtitle.textContent = isTelaioOrdered ? "Ordine" : "Conferma";
+  }
   dualWrap.classList.add("hidden");
   confirmWrap.classList.remove("hidden");
   renderCalendar("confirm", todoStatusDatePickerState.confirmMonth, todoStatusDatePickerState.confirmSelected);
@@ -8155,10 +8667,10 @@ function openTodoStatusDatePicker(action) {
   if (!todoStatusMenu || !todoMenuTarget) return;
   const panel = todoStatusMenu.querySelector(".todo-status-date-panel");
   if (!panel) return;
-  const existing = getTodoClientFlow(todoMenuTarget.commessaId, todoMenuTarget.titolo, todoMenuTarget.reparto);
   const now = startOfDay(new Date());
   todoStatusDatePickerState.action = action;
   if (action === "client_sent") {
+    const existing = getTodoClientFlow(todoMenuTarget.commessaId, todoMenuTarget.titolo, todoMenuTarget.reparto);
     const sent = parseIsoDateOnly(existing?.sentAt) || now;
     const due = parseIsoDateOnly(existing?.dueAt) || getDefaultClientFlowDueDate(sent) || now;
     todoStatusDatePickerState.sentSelected = sent;
@@ -8166,7 +8678,11 @@ function openTodoStatusDatePicker(action) {
     todoStatusDatePickerState.sentMonth = new Date(sent.getFullYear(), sent.getMonth(), 1);
     todoStatusDatePickerState.dueMonth = new Date(due.getFullYear(), due.getMonth(), 1);
   } else {
-    const confirmed = parseIsoDateOnly(existing?.confirmedAt) || now;
+    const confirmed =
+      action === "telaio_ordered"
+        ? getTodoTelaioOrderedDate(todoMenuTarget.commessaId) || now
+        : parseIsoDateOnly(getTodoClientFlow(todoMenuTarget.commessaId, todoMenuTarget.titolo, todoMenuTarget.reparto)?.confirmedAt) ||
+          now;
     todoStatusDatePickerState.confirmSelected = confirmed;
     todoStatusDatePickerState.confirmMonth = new Date(confirmed.getFullYear(), confirmed.getMonth(), 1);
   }
@@ -8326,9 +8842,14 @@ function openTodoStatusMenu(cell, x, y) {
   const currentStatus = getTodoStatusFor(commessaId, titolo, reparto);
   const isClientTracked = isTodoClientFlowTracked(titolo, reparto);
   const canAccessClientFlow = isClientTracked && currentStatus === "fatta";
+  const isTelaioOrderTracked = isTodoTelaioOrderTracked(titolo, reparto);
+  const canAccessTelaioOrder = isTelaioOrderTracked && currentStatus === "fatta";
   const clientFlow = isClientTracked ? getTodoClientFlow(commessaId, titolo, reparto) : null;
   const clientFlowResolvedStatus = isClientTracked ? getTodoClientFlowResolvedStatus(clientFlow, startOfDay(new Date())) : "";
   const clientFlowBlockReason = isClientTracked ? getTodoClientFlowEditBlockReason(commessaId, titolo, reparto) : "";
+  const telaioOrderBlockReason = isTelaioOrderTracked
+    ? getTodoTelaioOrderEditBlockReason(commessaId, titolo, reparto)
+    : "";
   const statusActions =
     role === "operatore"
       ? [
@@ -8349,6 +8870,10 @@ function openTodoStatusMenu(cell, x, y) {
       { action: "client_silence", label: "CLIENTE: SILENZIO ASSENSO..." },
       { action: "client_reset", label: "CLIENTE: RESET" }
     );
+  }
+  const telaioActions = [];
+  if (canAccessTelaioOrder) {
+    telaioActions.push({ action: "telaio_ordered", label: "TELAIO: DATA ORDINE..." });
   }
   const canShowGoMatrix = currentStatus === "schedulata";
   const getBlockReason = (def) => {
@@ -8380,6 +8905,9 @@ function openTodoStatusMenu(cell, x, y) {
     }
     if (!blockReason && def.action === "client_reset" && !clientFlow) {
       blockReason = "Nessun tracking cliente da resettare.";
+    }
+    if (!blockReason && def.action === "telaio_ordered" && telaioOrderBlockReason) {
+      blockReason = telaioOrderBlockReason;
     }
     return blockReason;
   };
@@ -8478,7 +9006,13 @@ function openTodoStatusMenu(cell, x, y) {
   } else if (isClientTracked) {
     appendInfoSection(clientSectionTitle, "Livello 2 disponibile solo con stato DONE.");
   }
-  if (clientActions.length) {
+  const telaioSectionTitle = getTodoTelaioOrderSectionTitle(titolo);
+  if (canAccessTelaioOrder) {
+    appendSection(telaioSectionTitle, telaioActions);
+  } else if (isTelaioOrderTracked) {
+    appendInfoSection(telaioSectionTitle, "Data ordine disponibile solo con stato DONE.");
+  }
+  if (clientActions.length || telaioActions.length) {
     const datePanel = document.createElement("div");
     datePanel.className = "todo-status-date-panel hidden";
     datePanel.innerHTML = `
@@ -8540,12 +9074,20 @@ function openTodoStatusMenu(cell, x, y) {
   todoStatusMenuManualPosition = false;
   todoStatusMenu.classList.remove("hidden");
   setTodoMenuFocus(rowKey);
-  positionTodoStatusMenuCentered();
-  requestAnimationFrame(() => positionTodoStatusMenuCentered());
+  if (matrixDualPanelsActive) {
+    positionMatrixDualStatusMenu();
+  } else {
+    positionTodoStatusMenuCentered();
+    requestAnimationFrame(() => positionTodoStatusMenuCentered());
+  }
 }
 
 function repositionTodoStatusMenuToAnchor() {
   if (!todoStatusMenu || todoStatusMenu.classList.contains("hidden")) return;
+  if (matrixDualPanelsActive) {
+    positionMatrixDualStatusMenu();
+    return;
+  }
   if (todoStatusMenuManualPosition) {
     positionTodoStatusMenuWithinViewport();
     return;
@@ -8558,6 +9100,11 @@ function setTodoMenuFocus(rowKey = "") {
   document.querySelectorAll(".todo-cell.todo-cell-focus").forEach((cell) => {
     cell.classList.remove("todo-cell-focus");
   });
+  if (matrixDualPanelsActive) {
+    if (todoFocusOverlay) todoFocusOverlay.classList.add("hidden");
+    document.body.classList.remove("todo-menu-open");
+    return;
+  }
   if (todoFocusOverlay) todoFocusOverlay.classList.remove("hidden");
   document.body.classList.add("todo-menu-open");
   if (!todoFocusedRowKey) return;
@@ -8573,6 +9120,13 @@ function closeTodoStatusMenu() {
   todoStatusMenuDrag = null;
   todoStatusMenu.style.cursor = "";
   todoStatusMenuManualPosition = false;
+  unmountTodoStatusMenuFromDualHost();
+  if (!matrixDualPanelsActive && activityModal && !activityModal.classList.contains("hidden")) {
+    activityModal.classList.remove("matrix-dual-open");
+  }
+  if (!matrixDualPanelsActive) {
+    matrixDualPanelsActive = false;
+  }
   closeTodoStatusDatePicker();
   todoStatusMenu.classList.add("hidden");
   todoMenuTarget = null;
@@ -8845,6 +9399,43 @@ async function applyTodoClientFlowAction(action, target, options = {}) {
   return false;
 }
 
+async function applyTodoTelaioOrderAction(action, target, options = {}) {
+  if (action !== "telaio_ordered" || !target?.commessaId) return false;
+  const activityStatus = getTodoStatusFor(target.commessaId, target.titolo, target.reparto || "");
+  if (activityStatus !== "fatta") {
+    setStatus("Data ordine telaio disponibile solo quando l'attivita e DONE.", "error");
+    return false;
+  }
+  const blockReason = getTodoTelaioOrderEditBlockReason(target.commessaId, target.titolo, target.reparto || "");
+  if (blockReason) {
+    setStatus(blockReason, "error");
+    return false;
+  }
+  const orderedAt = parseIsoDateOnly(options.selectedDate) || startOfDay(new Date());
+  const payload = {
+    telaio_consegnato: true,
+    data_consegna_telaio_effettiva: formatIsoDateOnly(orderedAt),
+  };
+  const { error } = await supabase.from("commesse").update(payload).eq("id", target.commessaId);
+  if (error) {
+    setStatus(`Update error: ${error.message}`, "error");
+    return false;
+  }
+  updateCommessaInState(target.commessaId, payload);
+  if (state.selected && state.selected.id === target.commessaId) {
+    if (d.data_consegna_telaio_effettiva) {
+      d.data_consegna_telaio_effettiva.value = payload.data_consegna_telaio_effettiva || "";
+    }
+    if (d.telaio_ordinato) {
+      setTelaioOrdinatoButton(d.telaio_ordinato, true, false, d.data_consegna_telaio_effettiva || null);
+    }
+  }
+  applyFilters();
+  renderMatrixReport();
+  setStatus("Data ordine telaio aggiornata.", "ok");
+  return true;
+}
+
 async function setTodoOverride(commessaId, titolo, enabled) {
   if (!commessaId || !titolo) return false;
   if (!state.canWrite) return false;
@@ -8929,6 +9520,9 @@ async function applyTodoStatusAction(action, target, options = {}) {
   }
   if (action.startsWith("client_")) {
     return applyTodoClientFlowAction(action, target, options);
+  }
+  if (action === "telaio_ordered") {
+    return applyTodoTelaioOrderAction(action, target, options);
   }
   const { commessaId, titolo, reparto } = target;
   const entries = getTodoEntriesForCell(commessaId, titolo, reparto);
@@ -9765,14 +10359,7 @@ function clearReportPreview(drag) {
 async function loadMatrixAttivita() {
   if (!state.session) return;
   debugLog("loadMatrixAttivita query");
-  const start = startOfWeek(matrixState.date);
-  const end = matrixState.view === "six"
-    ? endOfDay(addDays(start, 41))
-    : matrixState.view === "three"
-    ? endOfDay(addDays(start, 20))
-    : matrixState.view === "two"
-    ? endOfDay(addDays(start, 13))
-    : endOfDay(addDays(start, 6));
+  const { start, end } = getMatrixRange();
   let data = null;
   let error = null;
   if (!PREFER_REST_ON_RELOAD) {
@@ -10056,10 +10643,10 @@ async function saveCommessa(closeOnSuccess = true) {
     renderMatrixReport();
     setDetailSnapshot();
     setStatus("Commessa updated.", "ok");
-    await loadCommesse();
     if (closeOnSuccess) {
       closeCommessaDetailModal();
     }
+    await loadCommesse();
   } catch (err) {
     setStatus(`Unexpected error: ${err?.message || err}`, "error");
     console.error("handleUpdate error", err);
@@ -10651,9 +11238,6 @@ if (progressYearCurrent) {
   progressYearCurrent.addEventListener("click", () => {
     progressYearCurrent.classList.add("active");
     if (progressYearPrev) progressYearPrev.classList.remove("active");
-    progressSelectedId = null;
-    if (progressMeta) progressMeta.textContent = "Select a commessa.";
-    if (progressList) progressList.innerHTML = "";
     renderProgressResults();
   });
 }
@@ -10661,18 +11245,11 @@ if (progressYearPrev) {
   progressYearPrev.addEventListener("click", () => {
     progressYearPrev.classList.add("active");
     if (progressYearCurrent) progressYearCurrent.classList.remove("active");
-    progressSelectedId = null;
-    if (progressMeta) progressMeta.textContent = "Select a commessa.";
-    if (progressList) progressList.innerHTML = "";
     renderProgressResults();
   });
 }
   if (progressSearch) {
     progressSearch.addEventListener("input", () => {
-      progressSelectedId = null;
-      if (progressMeta) progressMeta.textContent = "Select a commessa.";
-      if (progressList) progressList.innerHTML = "";
-      if (progressTimelineDays) progressTimelineDays.innerHTML = "";
       renderProgressResults();
     });
   }
@@ -10802,6 +11379,7 @@ matrixTodayBtn.addEventListener("click", async () => {
   await loadMatrixAttivita();
 });
 matrixZoomInBtn.addEventListener("click", async () => {
+  matrixState.customWeeks = null;
   if (matrixState.view === "six") {
     matrixState.view = "three";
   } else if (matrixState.view === "three") {
@@ -10816,6 +11394,7 @@ matrixZoomInBtn.addEventListener("click", async () => {
   await loadMatrixAttivita();
 });
 matrixZoomOutBtn.addEventListener("click", async () => {
+  matrixState.customWeeks = null;
   if (matrixState.view === "week") {
     matrixState.view = "two";
   } else if (matrixState.view === "two") {
@@ -10921,6 +11500,9 @@ matrixToggleListBtn.addEventListener("click", () => {
     : "Comprimi lista";
 });
 matrixCommessaSearch.addEventListener("input", renderMatrixCommesseColumn);
+if (matrixCommessaYear) {
+  matrixCommessaYear.addEventListener("change", renderMatrixCommesseColumn);
+}
 assignConfirmBtn.addEventListener("click", handleAssignConfirm);
 closeAssignBtn.addEventListener("click", closeAssignModal);
 assignModal.addEventListener("click", (e) => {
@@ -10932,6 +11514,9 @@ if (matrixFilterSearch) {
 if (matrixFilterYear) {
   matrixFilterYear.addEventListener("change", renderMatrixFilterList);
 }
+if (matrixFilterNumero) {
+  matrixFilterNumero.addEventListener("input", renderMatrixFilterList);
+}
 if (matrixFilterClearBtn) {
   matrixFilterClearBtn.addEventListener("click", () => {
     matrixState.filterDraft.clear();
@@ -10942,7 +11527,10 @@ if (matrixFilterResetBtn) {
   matrixFilterResetBtn.addEventListener("click", () => {
     matrixState.filterDraft.clear();
     if (matrixFilterSearch) matrixFilterSearch.value = "";
-    if (matrixFilterYear) matrixFilterYear.value = "";
+    if (matrixFilterNumero) matrixFilterNumero.value = "";
+    if (matrixFilterYear) {
+      matrixFilterYear.value = matrixState.filterMode === "commessa" ? "2026" : "";
+    }
     renderMatrixFilterList();
   });
 }
@@ -10982,8 +11570,39 @@ if (activityGanttBtn) {
     jumpToReportActivity(attivita);
   });
 }
+if (activityModalDragHandle) {
+  activityModalDragHandle.addEventListener("pointerdown", startActivityModalDrag);
+  activityModalDragHandle.addEventListener("pointermove", moveActivityModalDrag);
+  activityModalDragHandle.addEventListener("pointerup", (event) => stopActivityModalDrag(event.pointerId));
+  activityModalDragHandle.addEventListener("pointercancel", (event) => stopActivityModalDrag(event.pointerId));
+}
 if (activitySaveBtn) {
   activitySaveBtn.addEventListener("click", saveActivityDuration);
+}
+if (activityHours1Btn && activityDurationInput) {
+  activityHours1Btn.addEventListener("click", () => {
+    activityDurationInput.value = "1";
+    updateActivityQuickHourButtons();
+    activityDurationInput.focus();
+  });
+}
+if (activityHours4Btn && activityDurationInput) {
+  activityHours4Btn.addEventListener("click", () => {
+    activityDurationInput.value = "4";
+    updateActivityQuickHourButtons();
+    activityDurationInput.focus();
+  });
+}
+if (activityHours8Btn && activityDurationInput) {
+  activityHours8Btn.addEventListener("click", () => {
+    activityDurationInput.value = "8";
+    updateActivityQuickHourButtons();
+    activityDurationInput.focus();
+  });
+}
+if (activityDurationInput) {
+  activityDurationInput.addEventListener("input", updateActivityQuickHourButtons);
+  activityDurationInput.addEventListener("change", updateActivityQuickHourButtons);
 }
 if (activityDeleteBtn) {
   activityDeleteBtn.addEventListener("click", deleteActivity);
@@ -11241,7 +11860,7 @@ if (todoStatusMenu) {
       setStatus(target.dataset.blockReason || "Azione non disponibile.", "error");
       return;
     }
-    if (action === "client_sent" || action === "client_confirmed" || action === "client_silence") {
+    if (action === "client_sent" || action === "client_confirmed" || action === "client_silence" || action === "telaio_ordered") {
       openTodoStatusDatePicker(action);
       return;
     }
@@ -11306,6 +11925,8 @@ window.addEventListener("resize", () => {
   updateTodoPanelHeaderOffset();
   repositionTodoStatusMenuToAnchor();
   repositionTodoGlobalStatusMenuToAnchor();
+  positionMatrixDualStatusMenu();
+  keepActivityModalInViewport();
 });
 window.addEventListener("focus", refreshTodoVisualizationNow);
 document.addEventListener("visibilitychange", () => {
@@ -11313,6 +11934,12 @@ document.addEventListener("visibilitychange", () => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    if (activityModal && !activityModal.classList.contains("hidden")) {
+      e.preventDefault();
+      closeTodoStatusMenu();
+      closeActivityModal();
+      return;
+    }
     closeTodoStatusMenu();
     closeTodoGlobalStatusMenu();
   }
@@ -11343,7 +11970,8 @@ document.addEventListener("click", (e) => {
     }
   }
   if (todoStatusMenu && !todoStatusMenu.classList.contains("hidden") && !skipTodoDismiss) {
-    if (!e.target.closest("#todoStatusMenu")) {
+    const insideDualModal = matrixDualPanelsActive && Boolean(e.target.closest("#activityModal"));
+    if (!e.target.closest("#todoStatusMenu") && !insideDualModal) {
       closeTodoStatusMenu();
     }
   }
