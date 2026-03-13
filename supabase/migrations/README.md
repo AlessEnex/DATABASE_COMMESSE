@@ -15,3 +15,4 @@ Quando aggiungi una nuova migrazione, aggiungi qui una riga con la descrizione i
 | `20260311113000_add_data_arrivo_kit_cavi.sql` | Aggiunge la data arrivo kit cavi alle commesse ed estende la funzione planner per aggiornarla. |
 | `20260311121000_update_v_commesse_add_kit_cavi.sql` | Aggiorna la vista `v_commesse` per includere `data_arrivo_kit_cavi`. |
 | `20260311133000_update_planner_rpc_add_prelievo.sql` | Estende la funzione planner per aggiornare anche la data prelievo materiali. |
+| `20260313103000_add_commessa_imponibili_reports.sql` | Crea la tabella dedicata agli imponibili per report (`commessa_imponibili`) con RLS solo admin e trigger `updated_at`. |
