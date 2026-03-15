@@ -64,6 +64,8 @@ const state = {
   reportFilteredToken: 0,
   reportFilteredLoading: false,
   reportFilteredKey: "",
+  reportGanttRowHeight: null,
+  machineTypes: [],
 };
 
 const el = (id) => document.getElementById(id);
@@ -72,6 +74,17 @@ const authStatus = el("authStatus");
 const roleBadge = el("roleBadge");
 const setPasswordBtn = el("setPasswordBtn");
 const statusMsg = el("statusMsg");
+const alarmsSection = el("alarmsSection");
+const alarmsTitle = el("alarmsTitle");
+const alarmsList = el("alarmsList");
+const openNotificationsBtn = el("openNotificationsBtn");
+const notificationsModal = el("notificationsModal");
+const closeNotificationsBtn = el("closeNotificationsBtn");
+const refreshNotificationsBtn = el("refreshNotificationsBtn");
+const notificationsOnlyMineBtn = el("notificationsOnlyMineBtn");
+const notificationsSummary = el("notificationsSummary");
+const notificationsClassFilters = el("notificationsClassFilters");
+const notificationsList = el("notificationsList");
 const revisionStamp = el("revisionStamp");
 
 const emailInput = el("emailInput");
@@ -152,10 +165,13 @@ function getDetailSnapshot() {
     numero: d.numero?.value || "",
     titolo: d.titolo?.value || "",
     cliente: d.cliente?.value || "",
+    tipo_macchina: d.tipo_macchina?.value || "",
+    variante_macchina: d.variante_macchina?.value || "",
     stato: d.stato?.value || "",
     priorita: d.priorita?.value || "",
     data_ingresso: d.data_ingresso?.value || "",
     data_ordine_telaio: d.data_ordine_telaio?.value || "",
+    data_conferma_consegna_telaio: d.data_conferma_consegna_telaio?.value || "",
     data_arrivo_kit_cavi: d.data_arrivo_kit_cavi?.value || "",
     data_prelievo: d.data_prelievo_materiali?.value || "",
     data_consegna: d.data_consegna?.value || "",
@@ -170,8 +186,37 @@ function setDetailSnapshot() {
   detailDirty = false;
 }
 
+function isDetailFieldFilled(field) {
+  if (!field) return false;
+  if (field.tagName === "SELECT") {
+    return String(field.value || "").trim() !== "";
+  }
+  const type = String(field.type || "").toLowerCase();
+  if (type === "checkbox" || type === "radio") {
+    return Boolean(field.checked);
+  }
+  return String(field.value || "").trim() !== "";
+}
+
+function updateDetailFieldCompletionUI() {
+  if (!detailForm) return;
+  const fields = detailForm.querySelectorAll("input, select, textarea");
+  fields.forEach((field) => {
+    const type = String(field.type || "").toLowerCase();
+    if (type === "hidden") return;
+    if (field.id === "d_note") {
+      field.classList.remove("detail-field-empty", "detail-field-filled");
+      return;
+    }
+    const filled = isDetailFieldFilled(field);
+    field.classList.toggle("detail-field-empty", !filled);
+    field.classList.remove("detail-field-filled");
+  });
+}
+
 function updateDetailDirty() {
   detailDirty = getDetailSnapshot() !== detailSnapshot;
+  updateDetailFieldCompletionUI();
 }
 
 function showToast(message, tone = "info", timeout = 2600) {
@@ -189,12 +234,32 @@ function showToast(message, tone = "info", timeout = 2600) {
   }, timeout);
 }
 
+function formatDbErrorMessage(errorLike) {
+  const message = String(errorLike?.message || errorLike || "").trim();
+  if (!message) return "Unknown error";
+  const lower = message.toLowerCase();
+  const missingMachineCols =
+    (lower.includes("tipo_macchina") || lower.includes("variante_macchina")) &&
+    (lower.includes("schema cache") || lower.includes("could not find"));
+  if (missingMachineCols) {
+    return "DB non aggiornato: esegui la migration 20260314153000_add_machine_type_to_commesse.sql e poi `NOTIFY pgrst, 'reload schema';` in Supabase SQL Editor.";
+  }
+  return message;
+}
+
 function setTelaioOrdinatoButton(button, isOrdered, showFeedback = false, plannedInput = null) {
   if (!button) return;
   button.dataset.ordered = isOrdered ? "true" : "false";
   button.classList.toggle("is-ordered", isOrdered);
   button.setAttribute("aria-pressed", isOrdered ? "true" : "false");
-  button.textContent = isOrdered ? "Telaio ordinato" : "Telaio da ordinare";
+  let label = "Telaio da ordinare";
+  if (isOrdered) {
+    const dateRaw = plannedInput ? plannedInput.value || "" : "";
+    const dateObj = parseIsoDateOnly(dateRaw);
+    const dateLabel = dateObj ? formatDateDMY(dateObj) : "";
+    label = dateLabel ? `Telaio ordinato (${dateLabel})` : "Telaio ordinato";
+  }
+  button.textContent = label;
   if (plannedInput) {
     plannedInput.disabled = false;
     plannedInput.title = "";
@@ -202,6 +267,504 @@ function setTelaioOrdinatoButton(button, isOrdered, showFeedback = false, planne
   if (showFeedback) {
     setStatus(isOrdered ? "Frame marked as ordered." : "Frame marked as to-order.", "ok");
   }
+}
+
+function findCommessaInState(commessaId) {
+  if (!commessaId) return null;
+  const key = String(commessaId);
+  return (
+    (state.commesse || []).find((c) => String(c.id) === key) ||
+    (state.filteredCommesse || []).find((c) => String(c.id) === key) ||
+    (state.reportFilteredCommesse || []).find((c) => String(c.id) === key) ||
+    (state.selected && String(state.selected.id) === key ? state.selected : null) ||
+    null
+  );
+}
+
+function ensureTelaioOrderPayloadConsistency(commessaId, payload, options = {}) {
+  if (!payload || typeof payload !== "object") return { ok: true, payload };
+  const hasOrderedPatch = Object.prototype.hasOwnProperty.call(payload, "telaio_consegnato");
+  const hasDatePatch = Object.prototype.hasOwnProperty.call(payload, "data_consegna_telaio_effettiva");
+  if (!hasOrderedPatch && !hasDatePatch) return { ok: true, payload };
+
+  const nextPayload = { ...payload };
+  if (hasDatePatch) {
+    nextPayload.data_consegna_telaio_effettiva = formatIsoDateOnly(nextPayload.data_consegna_telaio_effettiva);
+  }
+
+  const current = findCommessaInState(commessaId);
+  const nextOrdered = hasOrderedPatch ? Boolean(nextPayload.telaio_consegnato) : Boolean(current?.telaio_consegnato);
+  const nextDate = hasDatePatch
+    ? nextPayload.data_consegna_telaio_effettiva
+    : formatIsoDateOnly(current?.data_consegna_telaio_effettiva);
+  if (!(nextOrdered && !nextDate)) return { ok: true, payload: nextPayload };
+
+  const message = options.message || "Set a frame order date before marking as ordered.";
+  if (options.focusDateField && state.selected && String(state.selected.id) === String(commessaId)) {
+    if (d.data_consegna_telaio_effettiva) {
+      d.data_consegna_telaio_effettiva.classList.add("is-missing-required");
+      setTimeout(() => d.data_consegna_telaio_effettiva.classList.remove("is-missing-required"), 1600);
+      d.data_consegna_telaio_effettiva.focus();
+    }
+  }
+  if (options.notify !== false) setStatus(message, "error");
+  if (options.toast) showToast(message, "error");
+  return { ok: false, payload: nextPayload, message };
+}
+
+function getTelaioOrderAlarms() {
+  return [];
+}
+
+function renderTelaioOrderAlarms() {
+  if (!alarmsSection || !alarmsList) return;
+  const alarms = getTelaioOrderAlarms();
+  alarmsList.innerHTML = "";
+  alarmsSection.classList.toggle("hidden", alarms.length === 0);
+  if (alarmsTitle) {
+    alarmsTitle.textContent = alarms.length ? `Allarmi (${alarms.length})` : "Allarmi";
+  }
+  if (!alarms.length) {
+    if (!notificationsItemsCache.length) {
+      updateNotificationsButtonLabel(0);
+    }
+    return;
+  }
+
+  const maxItems = 8;
+  alarms.slice(0, maxItems).forEach((commessa) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "status-alarm-item";
+    item.textContent = `${getCommessaLabel(commessa.id)}: ordinato senza data`;
+    item.addEventListener("click", () => selectCommessa(commessa.id, { openModal: true }));
+    alarmsList.appendChild(item);
+  });
+  if (alarms.length > maxItems) {
+    const more = document.createElement("div");
+    more.className = "status-alarm-more";
+    more.textContent = `+${alarms.length - maxItems} altri`;
+    alarmsList.appendChild(more);
+  }
+  if (!notificationsItemsCache.length) {
+    updateNotificationsButtonLabel(alarms.length);
+  }
+}
+
+function isCommessaClosedForNotifications(commessa) {
+  const raw = normalizePhaseKey(commessa?.stato || "");
+  return raw === "chiusa" || raw.includes("evasa");
+}
+
+function getCommessaNotificationDueDate(commessa, field) {
+  if (!commessa || !field) return null;
+  if (field === "data_consegna_macchina") {
+    return parseIsoDateOnly(commessa.data_consegna_macchina || commessa.data_consegna_prevista || commessa.data_consegna || null);
+  }
+  return parseIsoDateOnly(commessa[field] || null);
+}
+
+function isNotificationEntryOwnedByCurrentUser(entry, ownRisorsaId, ownProfileId) {
+  if (!entry) return false;
+  const byRisorsa = ownRisorsaId && String(entry.risorsaId || "") === String(ownRisorsaId);
+  const byAssignee = ownProfileId && String(entry.assegnatoA || "") === String(ownProfileId);
+  return Boolean(byRisorsa || byAssignee);
+}
+
+function getNotificationUrgencyMeta(item, today = startOfDay(new Date())) {
+  if (item.type === "allarme") {
+    return {
+      group: 0,
+      sortValue: Number.NEGATIVE_INFINITY,
+      text: "Dato incoerente",
+      toneClass: "is-danger",
+      cardToneClass: "is-danger",
+    };
+  }
+  const dueAt = parseIsoDateOnly(item.dueAt);
+  if (!dueAt) {
+    return {
+      group: 4,
+      sortValue: Number.POSITIVE_INFINITY,
+      text: "Senza data",
+      toneClass: "",
+      cardToneClass: "",
+    };
+  }
+  const remaining = businessDayDiff(today, dueAt);
+  if (remaining < 0) {
+    return {
+      group: 0,
+      sortValue: remaining,
+      text: `Scaduta da ${Math.abs(remaining)}g lav.`,
+      toneClass: "is-danger",
+      cardToneClass: "is-danger",
+    };
+  }
+  if (remaining === 0) {
+    return {
+      group: 1,
+      sortValue: 0,
+      text: "Scade oggi",
+      toneClass: "is-warn",
+      cardToneClass: "is-warn",
+    };
+  }
+  if (remaining <= 2) {
+    return {
+      group: 2,
+      sortValue: remaining,
+      text: `Urgente: ${remaining}g lav.`,
+      toneClass: "is-soon",
+      cardToneClass: "is-soon",
+    };
+  }
+  return {
+    group: 3,
+    sortValue: remaining,
+    text: `Tra ${remaining}g lav.`,
+    toneClass: "",
+    cardToneClass: "",
+  };
+}
+
+function sortNotificationItems(items) {
+  return items.slice().sort((a, b) => {
+    if (a.urgency.group !== b.urgency.group) return a.urgency.group - b.urgency.group;
+    if (a.urgency.sortValue !== b.urgency.sortValue) return a.urgency.sortValue - b.urgency.sortValue;
+    const aDue = parseIsoDateOnly(a.dueAt);
+    const bDue = parseIsoDateOnly(b.dueAt);
+    const aTs = aDue ? aDue.getTime() : Number.POSITIVE_INFINITY;
+    const bTs = bDue ? bDue.getTime() : Number.POSITIVE_INFINITY;
+    if (aTs !== bTs) return aTs - bTs;
+    if (String(a.commessaCodice || "") !== String(b.commessaCodice || "")) {
+      return String(a.commessaCodice || "").localeCompare(String(b.commessaCodice || ""));
+    }
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
+}
+
+async function ensureNotificationsDataLoaded(commesse) {
+  if (!Array.isArray(commesse) || !commesse.length) return;
+  const missingActivities = commesse.filter((c) => !state.reportActivitiesMap.has(String(c.id)));
+  const missingFlows = commesse.filter((c) => !state.todoClientFlowLoadedCommesse.has(String(c.id)));
+  if (missingActivities.length) {
+    for (const chunk of chunkArray(missingActivities, REPORT_MAX_ITEMS)) {
+      await loadReportActivitiesFor(chunk);
+    }
+  }
+  if (missingFlows.length) {
+    for (const chunk of chunkArray(missingFlows, REPORT_MAX_ITEMS)) {
+      await loadTodoClientFlowsFor(chunk);
+    }
+  }
+}
+
+function buildNotificationItems(commesse) {
+  const today = startOfDay(new Date());
+  const ownRisorsaId = getOwnRisorsaId();
+  const ownProfileId = String(state.profile?.id || "");
+  const commessaById = new Map((commesse || []).map((commessa) => [String(commessa.id), commessa]));
+  const commessaMineMap = new Map();
+  const commessaPeopleMap = new Map();
+  const items = [];
+
+  (commesse || []).forEach((commessa) => {
+    const commessaId = String(commessa.id || "");
+    if (!commessaId) return;
+    const entries = state.reportActivitiesMap.get(commessaId) || [];
+    const activeEntries = entries.filter((entry) => normalizePhaseKey(entry.stato || "") !== "annullata");
+    const people = Array.from(
+      new Set(activeEntries.map((entry) => String(entry.risorsa || "").trim()).filter(Boolean))
+    );
+    const mine = activeEntries.some((entry) => isNotificationEntryOwnedByCurrentUser(entry, ownRisorsaId, ownProfileId));
+    commessaPeopleMap.set(commessaId, people);
+    commessaMineMap.set(commessaId, mine);
+
+    NOTIFICATION_COMMESSA_DEADLINES.forEach((def) => {
+      const dueAt = getCommessaNotificationDueDate(commessa, def.field);
+      if (!dueAt) return;
+      items.push({
+        id: `commessa|${commessaId}|${def.field}`,
+        type: "commessa",
+        typeLabel: "Commessa",
+        phaseKey: "",
+        commessaId: commessa.id,
+        commessaCodice: commessa.codice || "",
+        commessaLabel: getCommessaLabel(commessa.id) || `${commessa.codice || commessa.id}`,
+        title: def.label,
+        detail: `Stato: ${commessa.stato || "-"}`,
+        dueAt,
+        people,
+        mine,
+      });
+    });
+
+    activeEntries.forEach((entry) => {
+      const status = normalizePhaseKey(entry.stato || "");
+      if (status === "completata" || status === "annullata") return;
+      if (isAssenteTitle(entry.titolo || "")) return;
+      const dueAt = parseIsoDateOnly(entry.end || entry.start || null);
+      if (!dueAt) return;
+      const people = Array.from(new Set([String(entry.risorsa || "").trim()].filter(Boolean)));
+      const mine = isNotificationEntryOwnedByCurrentUser(entry, ownRisorsaId, ownProfileId);
+      const dept = normalizeDeptKey(entry.dept || "");
+      const deptLabel = dept || "Reparto n/d";
+      items.push({
+        id: `attivita|${commessaId}|${entry.id || `${entry.titolo}|${dueAt.getTime()}`}`,
+        type: "attivita",
+        typeLabel: "Attivita",
+        phaseKey: normalizePhaseKey(entry.titolo || ""),
+        commessaId: commessa.id,
+        commessaCodice: commessa.codice || "",
+        commessaLabel: getCommessaLabel(commessa.id) || `${commessa.codice || commessa.id}`,
+        title: entry.titolo || "Attivita",
+        detail: `${deptLabel} · ${status || "pianificata"}`,
+        dueAt,
+        people,
+        mine,
+      });
+    });
+  });
+
+  state.todoClientFlowMap.forEach((flow) => {
+    const commessaId = String(flow?.commessaId || "");
+    if (!commessaById.has(commessaId)) return;
+    const resolved = getTodoClientFlowResolvedStatus(flow, today);
+    if (resolved !== "in_attesa" && resolved !== "scaduto") return;
+    const dueAt = parseIsoDateOnly(flow.dueAt || null);
+    if (!dueAt) return;
+    const commessa = commessaById.get(commessaId);
+    const relatedEntries = getTodoEntriesForCell(commessaId, flow.titolo, flow.reparto || "");
+    const people = Array.from(
+      new Set(relatedEntries.map((entry) => String(entry.risorsa || "").trim()).filter(Boolean))
+    );
+    const mine =
+      relatedEntries.some((entry) => isNotificationEntryOwnedByCurrentUser(entry, ownRisorsaId, ownProfileId)) ||
+      Boolean(commessaMineMap.get(commessaId));
+    const sentLabel = flow.sentAt ? formatDateDMY(flow.sentAt) : "n/d";
+    items.push({
+      id: `cliente|${commessaId}|${normalizePhaseKey(flow.titolo)}|${normalizeDeptKey(flow.reparto || "")}`,
+      type: "cliente",
+      typeLabel: "Cliente",
+      phaseKey: normalizePhaseKey(flow.titolo || ""),
+      commessaId: commessa?.id,
+      commessaCodice: commessa?.codice || "",
+      commessaLabel: getCommessaLabel(commessa?.id) || `${commessa?.codice || commessa?.id || commessaId}`,
+      title: `Conferma cliente ${flow.titolo || ""}`.trim(),
+      detail: `Inviato ${sentLabel}`,
+      dueAt,
+      people,
+      mine,
+    });
+  });
+
+  getTelaioOrderAlarms().forEach((commessa) => {
+    const commessaId = String(commessa.id || "");
+    items.push({
+      id: `allarme|${commessaId}|telaio_ordered_missing_date`,
+      type: "allarme",
+      typeLabel: "Allarme",
+      phaseKey: "",
+      commessaId: commessa.id,
+      commessaCodice: commessa.codice || "",
+      commessaLabel: getCommessaLabel(commessa.id) || `${commessa.codice || commessa.id}`,
+      title: "Telaio ordinato senza data",
+      detail: "Correggere data ordine telaio effettiva.",
+      dueAt: null,
+      people: commessaPeopleMap.get(commessaId) || [],
+      mine: Boolean(commessaMineMap.get(commessaId)),
+    });
+  });
+
+  const enriched = items.map((item) => ({
+    ...item,
+    urgency: getNotificationUrgencyMeta(item, today),
+  }));
+  return sortNotificationItems(enriched);
+}
+
+function isPreliminare3DNotification(item) {
+  const phaseKey = normalizePhaseKey(item?.phaseKey || "");
+  return NOTIFICATION_PHASE_CLASS_KEYS.has(phaseKey);
+}
+
+function getNotificationClassOptions(items = []) {
+  const hasAllarme = (items || []).some((item) => item?.type === "allarme");
+  const base = [
+    { key: "all", label: "Tutte" },
+    { key: "preliminare_3d", label: "Preliminare/3D" },
+    { key: "commessa", label: "Scadenze commessa" },
+    { key: "attivita", label: "Attivita" },
+    { key: "cliente", label: "Cliente" },
+  ];
+  if (hasAllarme) base.push({ key: "allarme", label: "Allarmi" });
+  return base;
+}
+
+function matchesNotificationClassFilter(item, classKey = "all") {
+  if (!item) return false;
+  if (!classKey || classKey === "all") return true;
+  if (classKey === "preliminare_3d") return isPreliminare3DNotification(item);
+  if (classKey === "commessa") return item.type === "commessa";
+  if (classKey === "attivita") return item.type === "attivita";
+  if (classKey === "cliente") return item.type === "cliente";
+  if (classKey === "allarme") return item.type === "allarme";
+  return true;
+}
+
+function renderNotificationsClassFilters(items = []) {
+  if (!notificationsClassFilters) return;
+  const options = getNotificationClassOptions(items);
+  const validKeys = new Set(options.map((option) => option.key));
+  if (!validKeys.has(notificationsClassFilter)) {
+    notificationsClassFilter = "all";
+  }
+  notificationsClassFilters.innerHTML = "";
+  options.forEach((option) => {
+    const count =
+      option.key === "all"
+        ? items.length
+        : items.filter((item) => matchesNotificationClassFilter(item, option.key)).length;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `notifications-class-btn${notificationsClassFilter === option.key ? " active" : ""}`;
+    btn.dataset.classKey = option.key;
+    btn.textContent = `${option.label} (${count})`;
+    btn.addEventListener("click", () => {
+      notificationsClassFilter = option.key;
+      renderNotificationsFromCache();
+    });
+    notificationsClassFilters.appendChild(btn);
+  });
+}
+
+function updateNotificationsOnlyMineButton() {
+  if (!notificationsOnlyMineBtn) return;
+  notificationsOnlyMineBtn.dataset.onlyMine = notificationsOnlyMine ? "true" : "false";
+  notificationsOnlyMineBtn.textContent = notificationsOnlyMine ? "Solo le mie: ON" : "Solo le mie: OFF";
+  notificationsOnlyMineBtn.classList.toggle("active", notificationsOnlyMine);
+}
+
+function updateNotificationsButtonLabel(count = 0) {
+  if (!openNotificationsBtn) return;
+  const safeCount = Number(count) || 0;
+  openNotificationsBtn.textContent =
+    safeCount > 0 ? `Controlla notifiche (${safeCount})` : "Controlla notifiche";
+}
+
+function renderNotificationsFromCache() {
+  if (!notificationsList || !notificationsSummary) return;
+  const full = Array.isArray(notificationsItemsCache) ? notificationsItemsCache : [];
+  const scoped = notificationsOnlyMine ? full.filter((item) => item.mine) : full;
+  renderNotificationsClassFilters(scoped);
+  const visible = scoped.filter((item) => matchesNotificationClassFilter(item, notificationsClassFilter));
+  updateNotificationsButtonLabel(full.length);
+  const criticalCount = full.filter((item) => item.urgency.group === 0).length;
+  const modeLabel = notificationsOnlyMine ? " (solo mie)" : "";
+  const classLabel =
+    getNotificationClassOptions(scoped).find((option) => option.key === notificationsClassFilter)?.label || "Tutte";
+  notificationsSummary.textContent =
+    `${visible.length} notifiche visualizzate${modeLabel} · Classe: ${classLabel} · Critiche: ${criticalCount}.`;
+  notificationsList.innerHTML = "";
+
+  if (!visible.length) {
+    notificationsList.innerHTML = `<div class="matrix-empty">Nessuna scadenza da mostrare.</div>`;
+    return;
+  }
+
+  visible.forEach((item) => {
+    const wrap = document.createElement("article");
+    const cardTone = item.urgency.cardToneClass ? ` ${item.urgency.cardToneClass}` : "";
+    wrap.className = `notification-item${cardTone}`;
+    const dueAt = parseIsoDateOnly(item.dueAt);
+    const dueLabel = dueAt ? formatDateDMY(dueAt) : "n/d";
+    const peopleText = item.people && item.people.length ? item.people.slice(0, 4).join(", ") : "n/d";
+    const urgencyClass = item.urgency.toneClass ? ` ${item.urgency.toneClass}` : "";
+    wrap.innerHTML = `
+      <div class="notification-main">
+        <div class="notification-top">
+          <span class="notification-kind">${escapeHtml(item.typeLabel || "Notifica")}</span>
+          <span class="notification-urgency${urgencyClass}">${escapeHtml(item.urgency.text || "")}</span>
+        </div>
+        <div class="notification-title">${escapeHtml(item.commessaLabel || "-")} · ${escapeHtml(item.title || "-")}</div>
+        <div class="notification-meta">Scadenza: ${escapeHtml(dueLabel)} · ${escapeHtml(item.detail || "")}</div>
+        <div class="notification-meta">Coinvolti: ${escapeHtml(peopleText)}</div>
+      </div>
+      <button class="ghost notification-open-btn" type="button">Apri commessa</button>
+    `;
+    const openBtn = wrap.querySelector(".notification-open-btn");
+    if (openBtn) {
+      openBtn.addEventListener("click", () => {
+        if (!item.commessaId) return;
+        selectCommessa(item.commessaId, { openModal: true });
+        closeNotificationsModal();
+      });
+    }
+    notificationsList.appendChild(wrap);
+  });
+}
+
+async function refreshNotificationsPanel() {
+  if (!notificationsSummary || !notificationsList) return;
+  if (!state.session) {
+    notificationsItemsCache = [];
+    renderNotificationsClassFilters([]);
+    notificationsSummary.textContent = "Accedi per vedere le notifiche.";
+    notificationsList.innerHTML = `<div class="matrix-empty">Accedi per vedere le scadenze.</div>`;
+    updateNotificationsButtonLabel(0);
+    return;
+  }
+  if (notificationsRefreshInFlight) return;
+  notificationsRefreshInFlight = true;
+  if (refreshNotificationsBtn) {
+    refreshNotificationsBtn.disabled = true;
+    refreshNotificationsBtn.textContent = "Aggiorno...";
+  }
+  try {
+    notificationsSummary.textContent = "Caricamento scadenze in corso...";
+    notificationsList.innerHTML = `<div class="matrix-empty">Caricamento notifiche...</div>`;
+    const commesseScope = (state.commesse || []).filter((commessa) => !isCommessaClosedForNotifications(commessa));
+    if (!commesseScope.length) {
+      notificationsItemsCache = [];
+      renderNotificationsClassFilters([]);
+      notificationsSummary.textContent = "Nessuna commessa attiva con scadenze.";
+      notificationsList.innerHTML = `<div class="matrix-empty">Nessuna commessa attiva.</div>`;
+      updateNotificationsButtonLabel(0);
+      return;
+    }
+    await ensureNotificationsDataLoaded(commesseScope);
+    notificationsItemsCache = buildNotificationItems(commesseScope);
+    renderNotificationsFromCache();
+  } catch (err) {
+    const msg = `Errore notifiche: ${err?.message || err}`;
+    renderNotificationsClassFilters([]);
+    notificationsSummary.textContent = msg;
+    notificationsList.innerHTML = `<div class="matrix-empty">${escapeHtml(msg)}</div>`;
+    setStatus(msg, "error");
+  } finally {
+    notificationsRefreshInFlight = false;
+    if (refreshNotificationsBtn) {
+      refreshNotificationsBtn.disabled = false;
+      refreshNotificationsBtn.textContent = "Aggiorna";
+    }
+  }
+}
+
+function openNotificationsModal() {
+  if (!notificationsModal) return;
+  if (!state.session) {
+    setStatus("Accedi per vedere le notifiche.", "error");
+    return;
+  }
+  notificationsModal.classList.remove("hidden");
+  updateNotificationsOnlyMineButton();
+  void refreshNotificationsPanel();
+}
+
+function closeNotificationsModal() {
+  if (!notificationsModal) return;
+  notificationsModal.classList.add("hidden");
 }
 
 const getResetCooldownUntil = () => {
@@ -290,6 +853,7 @@ const commessePanel = el("commessePanel");
 const commessePanelBody = el("commessePanelBody");
 const commesseToggleBtn = el("commesseToggleBtn");
 const commesseTitle = el("commesseTitle");
+const commesseSeqAlert = el("commesseSeqAlert");
 const matrixPanel = el("matrixPanel");
 const matrixTitle = el("matrixTitle");
 const calendarPanel = el("calendarPanel");
@@ -348,17 +912,24 @@ const resourceActive = el("resourceActive");
 const importModal = el("importModal");
 const importTextarea = el("importTextarea");
 const importPreview = el("importPreview");
+const importProgressWrap = el("importProgressWrap");
+const importProgressBar = el("importProgressBar");
+const importProgressText = el("importProgressText");
+const importResult = el("importResult");
 const importCommitBtn = el("importCommitBtn");
+const copyImportHeaderBtn = el("copyImportHeaderBtn");
 const closeImportBtn = el("closeImportBtn");
 const importDatesModal = el("importDatesModal");
 const importDatesTextarea = el("importDatesTextarea");
 const importDatesPreview = el("importDatesPreview");
 const importDatesCommitBtn = el("importDatesCommitBtn");
+const copyImportDatesHeaderBtn = el("copyImportDatesHeaderBtn");
 const closeImportDatesBtn = el("closeImportDatesBtn");
 const importProductionModal = el("importProductionModal");
 const importProductionTextarea = el("importProductionTextarea");
 const importProductionPreview = el("importProductionPreview");
 const importProductionCommitBtn = el("importProductionCommitBtn");
+const copyImportProductionHeaderBtn = el("copyImportProductionHeaderBtn");
 const closeImportProductionBtn = el("closeImportProductionBtn");
 const backupModal = el("backupModal");
 const openBackupBtn = el("openBackupBtn");
@@ -390,6 +961,7 @@ const todoGlobalStatusMenu = el("todoGlobalStatusMenu");
 const todoFocusOverlay = el("todoFocusOverlay");
 const todoDescFilter = el("todoDescFilter");
 const todoNumberFilter = el("todoNumberFilter");
+const todoSyncMatrixFiltersBtn = el("todoSyncMatrixFiltersBtn");
 const todoYearFilter = el("todoYearFilter");
 const todoPriorityField = el("todoPriorityField");
 const todoPriorityBtn = el("todoPriorityBtn");
@@ -399,6 +971,7 @@ const todoInfoText = el("todoInfoText");
 const todoFilterControls = [
   todoDescFilter,
   todoNumberFilter,
+  todoSyncMatrixFiltersBtn,
   todoYearFilter,
   todoPriorityField,
   todoPriorityBtn,
@@ -406,6 +979,7 @@ const todoFilterControls = [
   todoCompleteBtn,
 ].filter(Boolean);
 const sectionToolbar = el("sectionToolbar");
+const sectionToolbarDate = el("sectionToolbarDate");
 const sectionLinks = Array.from(document.querySelectorAll(".section-link"));
 const MILESTONE_MIN_YEAR = 2024;
 const MILESTONE_MAX_YEAR = 2030;
@@ -430,9 +1004,13 @@ const matrixCommessa = el("matrixCommessa");
 const matrixAttivita = el("matrixAttivita");
 const matrixCommessaPicker = el("matrixCommessaPicker");
 const matrixCommessaPickerToggleBtn = el("matrixCommessaPickerToggleBtn");
+const matrixCommessaClearBtn = el("matrixCommessaClearBtn");
 const matrixCommessaPickerList = el("matrixCommessaPickerList");
+const matrixQuickCommessaWrap = el("matrixQuickCommessaWrap");
+const matrixQuickCommessaFilter = el("matrixQuickCommessaFilter");
 const matrixAttivitaPicker = el("matrixAttivitaPicker");
 const matrixAttivitaToggleBtn = el("matrixAttivitaToggleBtn");
+const matrixAttivitaClearBtn = el("matrixAttivitaClearBtn");
 const matrixAttivitaList = el("matrixAttivitaList");
 const matrixWrap = el("matrixWrap");
 const matrixCommessePanel = el("matrixCommessePanel");
@@ -463,7 +1041,23 @@ const REPORT_MAX_ITEMS = 200;
 const REPORT_DEFAULT_DAYS = 84;
 const REPORT_MIN_DAYS = 14;
 const REPORT_MAX_DAYS = 365;
+const REPORT_GANTT_ROW_HEIGHT_STORAGE_KEY = "commesse_report_gantt_row_height";
+const REPORT_GANTT_ROW_HEIGHT_DEFAULT = 58;
+const REPORT_GANTT_ROW_HEIGHT_MIN = 36;
+const REPORT_GANTT_ROW_HEIGHT_MAX = 170;
 let reportPanZoom = null;
+let reportGanttRowResize = null;
+const MATRIX_MIN_WEEKS = 1;
+const MATRIX_MAX_WEEKS = 12;
+const MATRIX_DEFAULT_WEEKS = 3;
+const MATRIX_MOVEMENT_ENABLED = true;
+const MATRIX_BUTTON_NAV_ENABLED = true;
+const MATRIX_ZOOM_BUTTONS_ENABLED = true;
+const MATRIX_AUTO_FIT_ON_ACTIVITY_FILTER = false;
+const MATRIX_PAN_DEADZONE_PX = 5;
+const MATRIX_TRANSPARENT_DRAG_IMAGE_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+const matrixTransparentDragImage = new Image();
+matrixTransparentDragImage.src = MATRIX_TRANSPARENT_DRAG_IMAGE_SRC;
 
 const assignModal = el("assignModal");
 const assignActivities = el("assignActivities");
@@ -481,6 +1075,7 @@ const matrixFilterCloseBtn = el("matrixFilterCloseBtn");
 const matrixFilterYear = el("matrixFilterYear");
 const matrixFilterNumero = el("matrixFilterNumero");
 const matrixFilterSearch = el("matrixFilterSearch");
+const matrixFilterSelectedPills = el("matrixFilterSelectedPills");
 const matrixFilterList = el("matrixFilterList");
 const matrixFilterClearBtn = el("matrixFilterClearBtn");
 const matrixFilterResetBtn = el("matrixFilterResetBtn");
@@ -503,6 +1098,9 @@ const activityDurationInput = el("activityDurationInput");
 const activityHours1Btn = el("activityHours1Btn");
 const activityHours4Btn = el("activityHours4Btn");
 const activityHours8Btn = el("activityHours8Btn");
+const activityHoursQuickButtons = activityModal
+  ? activityModal.querySelector(".activity-hours-row .quick-buttons")
+  : null;
 const activityDeleteBtn = el("activityDeleteBtn");
 const activitySaveBtn = el("activitySaveBtn");
 const confirmModal = el("confirmModal");
@@ -524,10 +1122,13 @@ const d = {
   numero: el("d_numero"),
   titolo: el("d_titolo"),
   cliente: el("d_cliente"),
+  tipo_macchina: el("d_tipo_macchina"),
+  variante_macchina: el("d_variante_macchina"),
   stato: el("d_stato"),
   priorita: el("d_priorita"),
   data_ingresso: el("d_data_ingresso"),
   data_ordine_telaio: el("d_data_ordine_telaio"),
+  data_conferma_consegna_telaio: el("d_data_conferma_consegna_telaio"),
   telaio_ordinato: el("d_telaio_ordinato"),
   data_consegna_telaio_effettiva: el("d_data_consegna_telaio_effettiva"),
   data_arrivo_kit_cavi: el("d_data_arrivo_kit_cavi"),
@@ -541,6 +1142,8 @@ const n = {
   numero: el("n_numero"),
   titolo: el("n_titolo"),
   cliente: el("n_cliente"),
+  tipo_macchina: el("n_tipo_macchina"),
+  variante_macchina: el("n_variante_macchina"),
   stato: el("n_stato"),
   priorita: el("n_priorita"),
   data_ingresso: el("n_data_ingresso"),
@@ -553,6 +1156,7 @@ const n = {
 
 const newNumeroWarning = el("n_numeroWarning");
 const detailNumeroWarning = el("d_numeroWarning");
+const detailTelaioPlannerWarning = el("d_telaioPlannerWarning");
 const newCodicePreview = el("n_codicePreview");
 
 const calendarState = {
@@ -579,7 +1183,15 @@ const matrixState = {
   attivita: [],
   risorse: [],
   draggingId: null,
-  view: "two",
+  dragPointerOffsetX: null,
+  dragPointerOffsetY: null,
+  dragFollowerEl: null,
+  dragFollowerOffsetX: null,
+  dragFollowerOffsetY: null,
+  dragSourceEl: null,
+  dragDropHandled: false,
+  dragSourceRestoreTimer: null,
+  view: "three",
   pendingDrop: null,
   colorMode: "none",
   selectedAttivita: new Set(),
@@ -594,6 +1206,16 @@ const matrixState = {
   reportSort: "asc",
   collapsedReparti: new Set(),
   customWeeks: null,
+  quickCommessaFilterRaw: "",
+  quickCommessaFilterIds: new Set(),
+  quickCommessaFilterYear: null,
+  panVisibleBusinessDays: 0,
+  panBufferBusinessDays: 0,
+  panDayWidthPx: 0,
+  panBaseOffsetPx: 0,
+  panResidualDays: 0,
+  initialRenderStabilized: false,
+  initialRenderStabilizeAttempts: 0,
 };
 
 let commessaHighlightId = null;
@@ -623,9 +1245,12 @@ let todoGlobalMenuTarget = null;
 let todoGlobalMenuAnchorEl = null;
 let todoGlobalMenuSuppress = false;
 let todoLastRendered = [];
+let todoSyncedCommessaIds = new Set();
 let todoScrollSyncLock = false;
 let todoFilterHeightLock = 0;
 let todoFilterUnlockTimer = null;
+let sectionToolbarDateKey = "";
+let sectionToolbarDateTimer = null;
 const todoStatusDatePickerState = {
   action: null,
   sentMonth: startOfDay(new Date()),
@@ -637,16 +1262,46 @@ const todoStatusDatePickerState = {
 };
 const TODO_VISUAL_REFRESH_MS = 30_000;
 let todoVisualRefreshTimer = null;
+let notificationsOnlyMine = false;
+let notificationsClassFilter = "all";
+let notificationsItemsCache = [];
+let notificationsRefreshInFlight = false;
 let deleteCommessaId = null;
 let detailSnapshot = "";
 let detailDirty = false;
 let backupPayload = null;
 let matrixPan = null;
+let matrixInitialRenderRafId = 0;
+let matrixBootstrapSyncInProgress = false;
+
+const IMPORT_HEADER_BASE = "anno\tnumero\tdescrizione\ttipo_macchina";
+const IMPORT_CHUNK_SIZE = 200;
+const IMPORT_HEADER_DATES =
+  "codice_commessa\tingresso_ordine\tordine_telaio_target\tordine_telaio_stimato\tprelievo_materiali\tordinato\tordine_telaio_effettivo\tconsegna_macchina";
+const IMPORT_HEADER_PRODUCTION =
+  "codice_commessa\tordine_telaio_target\tprelievo_materiali\tdata_arrivo_kit_cavi\tconsegna_macchina";
+
+const DEFAULT_MACHINE_TYPES = [
+  "TAGO",
+  "MINIBOOSTER SWISS",
+  "DRAVA",
+  "SENNA",
+  "SENNA-XS",
+  "NEVA",
+  "ELBA",
+  "LT-UNIT",
+  "AH",
+  "GH",
+  "YUKON",
+];
+
+const CUSTOM_VARIANT_MACHINE_TYPES = ["NEVA", "ELBA", "LT-UNIT", "YUKON"];
 
 const BACKUP_TABLES = [
   { name: "reparti", conflict: "id" },
   { name: "risorse", conflict: "id" },
   { name: "utenti", conflict: "id" },
+  { name: "permessi_ruolo", conflict: "ruolo" },
   { name: "commesse", conflict: "id" },
   { name: "commessa_schede", conflict: "commessa_id" },
   { name: "commesse_reparti", conflict: "commessa_id,reparto_id" },
@@ -655,8 +1310,19 @@ const BACKUP_TABLES = [
   { name: "commessa_attivita_override", conflict: "commessa_id,titolo" },
   { name: "commessa_attivita_cliente", conflict: "commessa_id,titolo,reparto" },
   { name: "commessa_imponibili", conflict: "commessa_id" },
+  { name: "motore_tipologie", conflict: "id" },
+  { name: "motore_varianti", conflict: "id" },
+  { name: "motore_regole", conflict: "variante_id,attivita_titolo" },
+  { name: "motore_canvas_config", conflict: "variante_id" },
+  { name: "motore_canvas_flow", conflict: "variante_id,attivita_titolo" },
+  { name: "motore_canvas_skill", conflict: "variante_id,risorsa_id" },
   { name: "whitelist_email", conflict: "email" },
   { name: "log_commessa", conflict: "id" },
+];
+const BACKUP_LOCAL_STORAGE_KEYS = [
+  "motore_canvas_structure_v1",
+  "motore_flow_layout_v1",
+  "motore_sandbox_mode_v1",
 ];
 
 function updateCommessaInState(commessaId, patch) {
@@ -676,12 +1342,78 @@ function updateCommessaInState(commessaId, patch) {
     const filtered = state.reportFilteredCommesse.find((c) => c.id === commessaId);
     if (filtered) Object.assign(filtered, patch);
   }
+  if (
+    Object.prototype.hasOwnProperty.call(patch, "telaio_consegnato") ||
+    Object.prototype.hasOwnProperty.call(patch, "data_consegna_telaio_effettiva")
+  ) {
+    refreshMatrixTelaioOrderIndicators(commessaId);
+    renderTelaioOrderAlarms();
+  }
   return target;
+}
+
+function resolveMatrixViewportAnchor(anchorEl = null) {
+  if (anchorEl && anchorEl.isConnected) return anchorEl;
+  if (!matrixGrid) return null;
+  return (
+    matrixGrid.querySelector(".matrix-activity-bar.commessa-highlight") ||
+    matrixGrid.querySelector(".matrix-row[data-risorsa-id]:not(.matrix-row-uninvolved)")
+  );
+}
+
+function preserveMatrixViewport(anchorEl, applyChange) {
+  if (typeof applyChange !== "function") return;
+  const prevX = window.scrollX;
+  const prevY = window.scrollY;
+  const anchor = resolveMatrixViewportAnchor(anchorEl);
+  const anchorTop = anchor ? anchor.getBoundingClientRect().top : null;
+  applyChange();
+  requestAnimationFrame(() => {
+    if (anchor && anchor.isConnected && Number.isFinite(anchorTop)) {
+      const nextTop = anchor.getBoundingClientRect().top;
+      const delta = nextTop - anchorTop;
+      if (Math.abs(delta) > 0.5) {
+        window.scrollBy(0, delta);
+        return;
+      }
+    }
+    window.scrollTo(prevX, prevY);
+  });
 }
 
 function isPlannerRole() {
   if (!state.profile) return false;
   return String(state.profile.ruolo || "").trim().toLowerCase() === "planner";
+}
+
+function canEditTelaioOrderByRole() {
+  if (!state.profile) return false;
+  const role = String(state.profile.ruolo || "").trim().toLowerCase();
+  return role === "admin" || role === "responsabile";
+}
+
+function refreshDetailTelaioOrderAccess() {
+  const canEdit = state.canWrite && canEditTelaioOrderByRole();
+  const isPlanner = isPlannerRole();
+  if (d.telaio_ordinato) d.telaio_ordinato.disabled = !canEdit;
+  if (d.data_consegna_telaio_effettiva) {
+    d.data_consegna_telaio_effettiva.disabled = !canEdit;
+    d.data_consegna_telaio_effettiva.title = canEdit
+      ? ""
+      : "Solo admin e responsabile possono modificare lo stato ordine telaio.";
+  }
+  if (d.data_conferma_consegna_telaio) {
+    d.data_conferma_consegna_telaio.disabled = !canEdit;
+    d.data_conferma_consegna_telaio.title = canEdit
+      ? ""
+      : "Solo admin e responsabile possono modificare la data pianificata telaio.";
+  }
+  if (d.telaio_ordinato) {
+    d.telaio_ordinato.title = canEdit ? "" : "Solo admin e responsabile possono modificare lo stato ordine telaio.";
+  }
+  if (detailTelaioPlannerWarning) {
+    detailTelaioPlannerWarning.classList.toggle("hidden", !isPlanner);
+  }
 }
 
 async function updateCommessaPlannerDates(commessaId, patch) {
@@ -707,9 +1439,63 @@ async function updateCommessaPlannerDates(commessaId, patch) {
   return null;
 }
 
-function applyCommessaHighlight(commessaId) {
+function isTelaioActivityTitle(title) {
+  return normalizePhaseKey(title) === "telaio";
+}
+
+function getLastTelaioEndDayFromRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const telaioRows = rows.filter((row) => isTelaioActivityTitle(row?.titolo || ""));
+  if (!telaioRows.length) return null;
+  let last = null;
+  telaioRows.forEach((row) => {
+    const end = row?.data_fine ? startOfDay(new Date(row.data_fine)) : null;
+    if (!end || Number.isNaN(end.getTime())) return;
+    if (!last || end.getTime() > last.getTime()) last = end;
+  });
+  return last;
+}
+
+async function fetchLastTelaioEndDayForCommessa(commessaId) {
+  if (!commessaId) return null;
+  const { data, error } = await supabase
+    .from("attivita")
+    .select("titolo,data_fine")
+    .eq("commessa_id", commessaId);
+  if (error) {
+    console.warn("telaio consistency check error", error.message);
+    return null;
+  }
+  return getLastTelaioEndDayFromRows(data || []);
+}
+
+function showTelaioPlannedMismatchWarning(commessaId, plannedDay, telaioEndDay) {
+  const label = getCommessaLabel(commessaId) || "Commessa";
+  if (!telaioEndDay) {
+    const msg = `${label}: data telaio pianificata ${formatDateDMY(plannedDay)} ma nessuna attivita TELAIO in Matrice.`;
+    showToast(msg, "info");
+    return;
+  }
+  if (plannedDay.getTime() !== telaioEndDay.getTime()) {
+    const msg = `${label}: TELAIO in Matrice chiude il ${formatDateDMY(
+      telaioEndDay
+    )}, ma data telaio pianificata e ${formatDateDMY(plannedDay)}.`;
+    showToast(msg, "info");
+  }
+}
+
+async function warnTelaioPlannedMismatch(commessaId, plannedDateRaw, options = {}) {
+  const plannedDay = parseIsoDateOnly(plannedDateRaw || null);
+  if (!commessaId || !plannedDay) return;
+  const hintedEndDay = options.telaioEndDay || null;
+  const telaioEndDay = hintedEndDay || (await fetchLastTelaioEndDayForCommessa(commessaId));
+  showTelaioPlannedMismatchWarning(commessaId, plannedDay, telaioEndDay);
+}
+
+function applyCommessaHighlight(commessaId, options = {}) {
   if (!matrixGrid) return;
   if (!commessaId) return;
+  const { preserveViewport: keepViewport = false, anchorEl = null } = options;
   commessaHighlightId = commessaId;
   commessaHighlightAt = Date.now();
   commessaLongPressSuppress = true;
@@ -725,15 +1511,132 @@ function applyCommessaHighlight(commessaId) {
     if (!a.risorsa_id) return;
     focusedRisorse.add(String(a.risorsa_id));
   });
-  applyMatrixResourceCompaction(focusedRisorse);
+  applyMatrixResourceCompaction(focusedRisorse, {
+    preserveViewport: keepViewport,
+    anchorEl,
+  });
+}
+
+function isMatrixQuickCommessaFilterActive() {
+  return Boolean(String(matrixState.quickCommessaFilterRaw || "").trim());
+}
+
+function getCommessaYearAndNumber(commessa) {
+  const parsed = parseCommessaCode(commessa?.codice || "");
+  const yearRaw = Number(commessa?.anno);
+  const numberRaw = Number(commessa?.numero);
+  const year = Number.isInteger(yearRaw) && yearRaw > 0 ? yearRaw : parsed.year;
+  const num = Number.isInteger(numberRaw) && numberRaw > 0 ? numberRaw : parsed.num;
+  return { year, num };
+}
+
+function resolveMatrixQuickCommessaFilter(numero) {
+  if (!Number.isFinite(numero) || numero < 1) {
+    return { ids: new Set(), year: null };
+  }
+  const currentYear = new Date().getFullYear();
+  const previousYear = currentYear - 1;
+  const byYear = (targetYear) =>
+    (state.commesse || [])
+      .filter((c) => {
+        const parts = getCommessaYearAndNumber(c);
+        return parts.year === targetYear && parts.num === numero;
+      })
+      .map((c) => String(c.id));
+  const currentMatches = byYear(currentYear);
+  if (currentMatches.length) {
+    return { ids: new Set(currentMatches), year: currentYear };
+  }
+  const previousMatches = byYear(previousYear);
+  if (previousMatches.length) {
+    return { ids: new Set(previousMatches), year: previousYear };
+  }
+  return { ids: new Set(), year: null };
+}
+
+function getActiveMatrixCommessaFilter() {
+  if (isMatrixQuickCommessaFilterActive()) {
+    return {
+      active: true,
+      ids: new Set(matrixState.quickCommessaFilterIds || []),
+      source: "quick",
+    };
+  }
+  return {
+    active: matrixState.selectedCommesse.size > 0,
+    ids: new Set(matrixState.selectedCommesse || []),
+    source: "advanced",
+  };
+}
+
+function updateMatrixQuickCommessaUi() {
+  const quickActive = isMatrixQuickCommessaFilterActive();
+  const hasMatch = (matrixState.quickCommessaFilterIds || new Set()).size > 0;
+  if (matrixQuickCommessaWrap) {
+    matrixQuickCommessaWrap.classList.toggle("is-active", quickActive);
+    matrixQuickCommessaWrap.classList.toggle("is-no-match", quickActive && !hasMatch);
+  }
+  if (matrixCommessaPickerToggleBtn) {
+    matrixCommessaPickerToggleBtn.classList.toggle("is-disabled", quickActive);
+    matrixCommessaPickerToggleBtn.setAttribute("aria-disabled", quickActive ? "true" : "false");
+    if (quickActive) {
+      matrixCommessaPickerToggleBtn.title = "Disattiva il filtro rapido per usare \"Filtra commesse\"";
+    } else {
+      matrixCommessaPickerToggleBtn.removeAttribute("title");
+    }
+  }
+  if (matrixQuickCommessaFilter) {
+    const expected = String(matrixState.quickCommessaFilterRaw || "");
+    if (matrixQuickCommessaFilter.value !== expected) matrixQuickCommessaFilter.value = expected;
+    if (!quickActive) {
+      matrixQuickCommessaFilter.title = "Filtro rapido per numero commessa";
+      return;
+    }
+    if (hasMatch) {
+      const annoLabel = matrixState.quickCommessaFilterYear ? `anno ${matrixState.quickCommessaFilterYear}` : "anno attivo";
+      matrixQuickCommessaFilter.title = `Filtro rapido attivo (${annoLabel})`;
+      return;
+    }
+    matrixQuickCommessaFilter.title = "Nessuna commessa trovata su anno corrente o precedente";
+  }
+}
+
+function setMatrixQuickCommessaFilterRaw(rawValue, options = {}) {
+  const shouldRender = options.render !== false;
+  const normalized = String(rawValue || "")
+    .replace(/[^\d]/g, "")
+    .slice(0, 6);
+  matrixState.quickCommessaFilterRaw = normalized;
+  if (!normalized) {
+    matrixState.quickCommessaFilterIds = new Set();
+    matrixState.quickCommessaFilterYear = null;
+    updateMatrixCommessaPickerLabel();
+    updateMatrixQuickCommessaUi();
+    if (shouldRender) renderMatrix();
+    return;
+  }
+  const numero = Number.parseInt(normalized, 10);
+  const resolved = resolveMatrixQuickCommessaFilter(numero);
+  matrixState.quickCommessaFilterIds = resolved.ids;
+  matrixState.quickCommessaFilterYear = resolved.year;
+  updateMatrixCommessaPickerLabel();
+  updateMatrixQuickCommessaUi();
+  if (shouldRender) renderMatrix();
 }
 
 function updateMatrixCommessaPickerLabel() {
   if (!matrixCommessaPickerToggleBtn) return;
+  if (isMatrixQuickCommessaFilterActive()) {
+    matrixCommessaPickerToggleBtn.textContent = "Filtra commesse";
+    matrixCommessaPickerToggleBtn.classList.remove("active");
+    if (matrixCommessaClearBtn) matrixCommessaClearBtn.classList.add("hidden");
+    return;
+  }
   const count = matrixState.selectedCommesse.size;
   if (count === 0) {
     matrixCommessaPickerToggleBtn.textContent = "Filtra commesse";
     matrixCommessaPickerToggleBtn.classList.remove("active");
+    if (matrixCommessaClearBtn) matrixCommessaClearBtn.classList.add("hidden");
     return;
   }
   if (count === 1) {
@@ -744,6 +1647,26 @@ function updateMatrixCommessaPickerLabel() {
     matrixCommessaPickerToggleBtn.textContent = `${count} commesse`;
   }
   matrixCommessaPickerToggleBtn.classList.add("active");
+  if (matrixCommessaClearBtn) matrixCommessaClearBtn.classList.remove("hidden");
+}
+
+function updateMatrixAttivitaPickerLabel() {
+  if (!matrixAttivitaToggleBtn) return;
+  const count = matrixState.selectedAttivita.size;
+  if (count === 0) {
+    matrixAttivitaToggleBtn.textContent = "Filtra attivita";
+    matrixAttivitaToggleBtn.classList.remove("active");
+    if (matrixAttivitaClearBtn) matrixAttivitaClearBtn.classList.add("hidden");
+    return;
+  }
+  if (count === 1) {
+    const only = Array.from(matrixState.selectedAttivita)[0];
+    matrixAttivitaToggleBtn.textContent = only || "Attivita selezionata";
+  } else {
+    matrixAttivitaToggleBtn.textContent = `${count} attivita`;
+  }
+  matrixAttivitaToggleBtn.classList.add("active");
+  if (matrixAttivitaClearBtn) matrixAttivitaClearBtn.classList.remove("hidden");
 }
 
 function setMatrixSelectedCommesse(ids = []) {
@@ -755,57 +1678,79 @@ function setMatrixSelectedCommesse(ids = []) {
     matrixCommessa.value = "";
   }
   updateMatrixCommessaPickerLabel();
+  updateMatrixQuickCommessaUi();
 }
 
-function clearCommessaHighlight() {
+function clearCommessaHighlight(options = {}) {
   if (!matrixGrid) return;
   if (!commessaHighlightId) return;
+  const { preserveViewport: keepViewport = false, anchorEl = null } = options;
+  const viewportAnchor = resolveMatrixViewportAnchor(anchorEl);
   const bars = matrixGrid.querySelectorAll(".matrix-activity-bar");
   bars.forEach((bar) => {
     bar.classList.remove("commessa-highlight", "commessa-dim");
   });
-  clearMatrixResourceCompaction();
+  clearMatrixResourceCompaction({
+    preserveViewport: keepViewport,
+    anchorEl: viewportAnchor,
+  });
   commessaHighlightId = null;
   if (matrixState.selectedAttivita.size > 0) {
     applyMatrixActivityFilterCompaction();
   }
 }
 
-function clearMatrixResourceCompaction() {
+function clearMatrixResourceCompaction(options = {}) {
   if (!matrixGrid) return;
-  matrixGrid.querySelectorAll(".matrix-row-uninvolved").forEach((row) => {
-    row.classList.remove("matrix-row-uninvolved");
-  });
-  matrixGrid.querySelectorAll(".matrix-section-row-uninvolved").forEach((row) => {
-    row.classList.remove("matrix-section-row-uninvolved");
-  });
+  const { preserveViewport: keepViewport = false, anchorEl = null } = options;
+  const runClear = () => {
+    matrixGrid.querySelectorAll(".matrix-row-uninvolved").forEach((row) => {
+      row.classList.remove("matrix-row-uninvolved");
+    });
+    matrixGrid.querySelectorAll(".matrix-section-row-uninvolved").forEach((row) => {
+      row.classList.remove("matrix-section-row-uninvolved");
+    });
+  };
+  if (!keepViewport) {
+    runClear();
+    return;
+  }
+  preserveMatrixViewport(anchorEl, runClear);
 }
 
-function applyMatrixResourceCompaction(involvedRisorse = new Set()) {
+function applyMatrixResourceCompaction(involvedRisorse = new Set(), options = {}) {
   if (!matrixGrid) return;
-  matrixGrid.querySelectorAll(".matrix-row[data-risorsa-id]").forEach((row) => {
-    const risorsaId = String(row.dataset.risorsaId || "");
-    const involved = involvedRisorse.has(risorsaId);
-    row.classList.toggle("matrix-row-uninvolved", !involved);
-  });
-  const sectionRows = Array.from(matrixGrid.querySelectorAll(".matrix-section-row"));
-  sectionRows.forEach((section) => {
-    let hasInvolved = false;
-    let cursor = section.nextElementSibling;
-    while (cursor && !cursor.classList.contains("matrix-section-row")) {
-      if (
-        cursor.classList &&
-        cursor.classList.contains("matrix-row") &&
-        cursor.dataset.risorsaId &&
-        !cursor.classList.contains("matrix-row-uninvolved")
-      ) {
-        hasInvolved = true;
-        break;
+  const { preserveViewport: keepViewport = false, anchorEl = null } = options;
+  const runCompaction = () => {
+    matrixGrid.querySelectorAll(".matrix-row[data-risorsa-id]").forEach((row) => {
+      const risorsaId = String(row.dataset.risorsaId || "");
+      const involved = involvedRisorse.has(risorsaId);
+      row.classList.toggle("matrix-row-uninvolved", !involved);
+    });
+    const sectionRows = Array.from(matrixGrid.querySelectorAll(".matrix-section-row"));
+    sectionRows.forEach((section) => {
+      let hasInvolved = false;
+      let cursor = section.nextElementSibling;
+      while (cursor && !cursor.classList.contains("matrix-section-row")) {
+        if (
+          cursor.classList &&
+          cursor.classList.contains("matrix-row") &&
+          cursor.dataset.risorsaId &&
+          !cursor.classList.contains("matrix-row-uninvolved")
+        ) {
+          hasInvolved = true;
+          break;
+        }
+        cursor = cursor.nextElementSibling;
       }
-      cursor = cursor.nextElementSibling;
-    }
-    section.classList.toggle("matrix-section-row-uninvolved", !hasInvolved);
-  });
+      section.classList.toggle("matrix-section-row-uninvolved", !hasInvolved);
+    });
+  };
+  if (!keepViewport) {
+    runCompaction();
+    return;
+  }
+  preserveMatrixViewport(anchorEl, runCompaction);
 }
 
 function applyMatrixActivityFilterCompaction() {
@@ -814,10 +1759,10 @@ function applyMatrixActivityFilterCompaction() {
     return;
   }
   const involved = new Set();
-  const filterCommesse = matrixState.selectedCommesse.size > 0;
+  const commessaFilter = getActiveMatrixCommessaFilter();
   matrixState.attivita.forEach((a) => {
     if (!matrixState.selectedAttivita.has(a.titolo)) return;
-    if (filterCommesse && !matrixState.selectedCommesse.has(a.commessa_id)) return;
+    if (commessaFilter.active && !commessaFilter.ids.has(String(a.commessa_id || ""))) return;
     if (!a.risorsa_id) return;
     involved.add(String(a.risorsa_id));
   });
@@ -923,51 +1868,187 @@ async function toggleQuickMenuDone() {
     setStatus(`Update error: ${error.message}`, "error");
     return;
   }
-  const isTelaio = (quickMenuAttivita.titolo || "").trim().toLowerCase() === "telaio";
-  let commessaUpdated = false;
-  if (nextState === "completata" && isTelaio && quickMenuAttivita.commessa_id) {
-    const endDateRaw = quickMenuAttivita.data_fine ? new Date(quickMenuAttivita.data_fine) : null;
-    const endDate = endDateRaw && !Number.isNaN(endDateRaw.getTime()) ? startOfDay(endDateRaw) : null;
-    const existingCommessa = state.commesse.find((c) => c.id === quickMenuAttivita.commessa_id);
-    const payload = {
-      telaio_consegnato: true,
-    };
-    if (!existingCommessa?.data_consegna_telaio_effettiva && endDate) {
-      payload.data_consegna_telaio_effettiva = formatDateInput(endDate);
-    }
-    const { error: commessaError } = await supabase
-      .from("commesse")
-      .update(payload)
-      .eq("id", quickMenuAttivita.commessa_id);
-    if (commessaError) {
-      setStatus(`Activity completed, but failed to update delivery flag: ${commessaError.message}`, "error");
-    } else {
-      updateCommessaInState(quickMenuAttivita.commessa_id, payload);
-      if (state.selected && state.selected.id === quickMenuAttivita.commessa_id) {
-        if (d.telaio_ordinato) {
-          setTelaioOrdinatoButton(d.telaio_ordinato, true, false, d.data_consegna_telaio_effettiva || null);
-        }
-        if (d.data_consegna_telaio_effettiva) {
-          d.data_consegna_telaio_effettiva.value = payload.data_consegna_telaio_effettiva || "";
-        }
-      }
-      applyFilters();
-      renderMatrixReport();
-      commessaUpdated = true;
-    }
-  }
-  if (!commessaUpdated) {
-    setStatus(nextState === "completata" ? "Activity completed." : "Activity reopened.", "ok");
-  }
+  setStatus(nextState === "completata" ? "Activity completed." : "Activity reopened.", "ok");
+  const touchedCommessaId = quickMenuAttivita?.commessa_id || null;
   closeMatrixQuickMenu();
   await loadMatrixAttivita();
-  if (commessaUpdated) {
-    setStatus("Activity completed. Delivery flagged.", "ok");
-  }
+  await refreshTodoRealtimeSnapshot([touchedCommessaId]);
 }
 
 function setMatrixViewLabel() {
   return;
+}
+
+function updateMatrixDropEffect(e) {
+  if (!e?.dataTransfer) return;
+  const isCopy = e.altKey || e.ctrlKey || e.metaKey;
+  try {
+    e.dataTransfer.dropEffect = isCopy ? "copy" : "move";
+  } catch (_err) {
+    // Ignore unsupported dropEffect assignments.
+  }
+}
+
+function updateMatrixDragFollowerPosition(clientX, clientY) {
+  const el = matrixState.dragFollowerEl;
+  if (!el) return;
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+  const rect = el.getBoundingClientRect();
+  const offsetX = Number.isFinite(matrixState.dragFollowerOffsetX)
+    ? matrixState.dragFollowerOffsetX
+    : rect.width / 2;
+  const offsetY = Number.isFinite(matrixState.dragFollowerOffsetY)
+    ? matrixState.dragFollowerOffsetY
+    : rect.height / 2;
+  el.style.left = `${clientX - offsetX}px`;
+  el.style.top = `${clientY - offsetY}px`;
+}
+
+function removeMatrixDragFollower() {
+  if (matrixState.dragFollowerEl) {
+    matrixState.dragFollowerEl.remove();
+    matrixState.dragFollowerEl = null;
+  }
+  matrixState.dragFollowerOffsetX = null;
+  matrixState.dragFollowerOffsetY = null;
+}
+
+function clearMatrixDragSourceRestoreTimer() {
+  if (!matrixState.dragSourceRestoreTimer) return;
+  window.clearTimeout(matrixState.dragSourceRestoreTimer);
+  matrixState.dragSourceRestoreTimer = null;
+}
+
+function restoreMatrixDragSourceVisual() {
+  clearMatrixDragSourceRestoreTimer();
+  removeMatrixDragFollower();
+  const source = matrixState.dragSourceEl;
+  if (source && source.isConnected) {
+    source.style.removeProperty("opacity");
+    source.style.removeProperty("pointer-events");
+    source.classList.remove("dragging");
+  }
+  matrixState.dragSourceEl = null;
+  matrixState.dragDropHandled = false;
+}
+
+function markMatrixDragDropHandled() {
+  matrixState.dragDropHandled = true;
+  const source = matrixState.dragSourceEl;
+  if (source && source.isConnected) {
+    source.style.opacity = "0";
+    source.style.pointerEvents = "none";
+  }
+  clearMatrixDragSourceRestoreTimer();
+  matrixState.dragSourceRestoreTimer = window.setTimeout(() => {
+    // Fallback: if no redraw happened (drop error/cancel), make source visible again.
+    restoreMatrixDragSourceVisual();
+  }, 2600);
+}
+
+function createMatrixDragFollower(bar, e) {
+  removeMatrixDragFollower();
+  restoreMatrixDragSourceVisual();
+  if (!bar) return;
+  const rect = bar.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const follower = bar.cloneNode(true);
+  follower.classList.remove("dragging", "resizing");
+  follower.classList.add("matrix-drag-follower");
+  follower.querySelectorAll(".matrix-resize-handle").forEach((node) => node.remove());
+  follower.style.width = `${rect.width}px`;
+  follower.style.height = `${rect.height}px`;
+  follower.style.left = `${rect.left}px`;
+  follower.style.top = `${rect.top}px`;
+  document.body.appendChild(follower);
+  matrixState.dragFollowerEl = follower;
+  matrixState.dragFollowerOffsetX = Number.isFinite(matrixState.dragPointerOffsetX)
+    ? matrixState.dragPointerOffsetX
+    : rect.width / 2;
+  matrixState.dragFollowerOffsetY = Number.isFinite(matrixState.dragPointerOffsetY)
+    ? matrixState.dragPointerOffsetY
+    : rect.height / 2;
+  matrixState.dragSourceEl = bar;
+  matrixState.dragDropHandled = false;
+  updateMatrixDragFollowerPosition(e?.clientX, e?.clientY);
+}
+
+function resetMatrixMovementBaseline() {
+  matrixState.customWeeks = null;
+  matrixState.view = "three";
+  matrixState.date = normalizeMatrixStartDate(new Date());
+  matrixState.panVisibleBusinessDays = 0;
+  matrixState.panBufferBusinessDays = 0;
+  matrixState.panDayWidthPx = 0;
+  matrixState.panBaseOffsetPx = 0;
+  matrixState.panResidualDays = 0;
+  matrixPan = null;
+  if (matrixDate) matrixDate.value = formatDateInput(matrixState.date);
+  if (matrixGrid) {
+    matrixGrid.classList.remove("is-panning");
+    matrixGrid.classList.remove("is-zooming-preview");
+    matrixGrid.classList.remove("is-pan-snapping");
+  }
+  setMatrixViewLabel();
+}
+
+function cancelPendingMatrixInitialRender() {
+  if (!matrixInitialRenderRafId) return;
+  cancelAnimationFrame(matrixInitialRenderRafId);
+  matrixInitialRenderRafId = 0;
+}
+
+function scheduleMatrixRenderStabilized() {
+  if (matrixState.initialRenderStabilized) {
+    renderMatrix();
+    renderMatrixReport();
+    return;
+  }
+  cancelPendingMatrixInitialRender();
+  const getProbeWidth = () => {
+    if (!matrixGrid) return 0;
+    const rectW = Number(matrixGrid.getBoundingClientRect?.().width || 0);
+    const clientW = Number(matrixGrid.clientWidth || 0);
+    return Math.max(rectW, clientW);
+  };
+  matrixInitialRenderRafId = requestAnimationFrame(() => {
+    const w1 = getProbeWidth();
+    matrixInitialRenderRafId = requestAnimationFrame(() => {
+      const w2 = getProbeWidth();
+      const widthStable = w1 > 0 && w2 > 0 && Math.abs(w2 - w1) < 1.5;
+      const maxAttempts = 10;
+      if (!widthStable && matrixState.initialRenderStabilizeAttempts < maxAttempts) {
+        matrixInitialRenderRafId = 0;
+        matrixState.initialRenderStabilizeAttempts += 1;
+        scheduleMatrixRenderStabilized();
+        return;
+      }
+      matrixInitialRenderRafId = 0;
+      renderMatrix();
+      renderMatrixReport();
+      matrixState.initialRenderStabilized = true;
+      matrixState.initialRenderStabilizeAttempts = 0;
+    });
+  });
+}
+
+function applyMatrixMovementControlsState() {
+  const navControls = [matrixPrevBtn, matrixNextBtn];
+  navControls.forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = !MATRIX_BUTTON_NAV_ENABLED;
+    btn.classList.toggle("hidden", !MATRIX_BUTTON_NAV_ENABLED);
+    btn.setAttribute("aria-disabled", !MATRIX_BUTTON_NAV_ENABLED ? "true" : "false");
+    btn.title = MATRIX_BUTTON_NAV_ENABLED ? "" : "Navigazione da pulsanti disattivata";
+  });
+  const zoomControls = [matrixZoomInBtn, matrixZoomOutBtn];
+  zoomControls.forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = !MATRIX_ZOOM_BUTTONS_ENABLED;
+    btn.classList.toggle("hidden", !MATRIX_ZOOM_BUTTONS_ENABLED);
+    btn.setAttribute("aria-disabled", !MATRIX_ZOOM_BUTTONS_ENABLED ? "true" : "false");
+    btn.title = MATRIX_ZOOM_BUTTONS_ENABLED ? "" : "Zoom da pulsanti disattivato";
+  });
 }
 
 function hashString(value) {
@@ -1021,7 +2102,8 @@ function getSelectedMatrixAttivita() {
 }
 
 function getSelectedMatrixCommesse() {
-  return Array.from(matrixState.selectedCommesse);
+  const commessaFilter = getActiveMatrixCommessaFilter();
+  return commessaFilter.active ? Array.from(commessaFilter.ids) : [];
 }
 
 function getCommessaYear(commessa) {
@@ -1032,6 +2114,12 @@ function getCommessaYear(commessa) {
 
 function openMatrixFilter(mode) {
   if (!matrixFilterModal || !matrixFilterSearch || !matrixFilterTitle || !matrixFilterList) return;
+  if (mode === "commessa" && isMatrixQuickCommessaFilterActive()) {
+    setStatus('Disattiva prima il filtro rapido "numero comm." per usare "Filtra commesse".', "error");
+    matrixQuickCommessaFilter?.focus();
+    matrixQuickCommessaFilter?.select?.();
+    return;
+  }
   matrixState.filterMode = mode;
   matrixState.filterDraft = new Set(
     mode === "commessa" ? Array.from(matrixState.selectedCommesse) : Array.from(matrixState.selectedAttivita)
@@ -1073,7 +2161,15 @@ function openMatrixFilter(mode) {
   }
   renderMatrixFilterList();
   matrixFilterModal.classList.remove("hidden");
-  matrixFilterSearch.focus();
+  requestAnimationFrame(() => {
+    if (mode === "commessa" && matrixFilterNumero && !matrixFilterNumero.classList.contains("hidden")) {
+      matrixFilterNumero.focus();
+      matrixFilterNumero.select?.();
+      return;
+    }
+    matrixFilterSearch.focus();
+    matrixFilterSearch.select?.();
+  });
 }
 
 function closeMatrixFilter() {
@@ -1081,10 +2177,43 @@ function closeMatrixFilter() {
   matrixFilterModal.classList.add("hidden");
 }
 
+function renderMatrixFilterSelectedPills() {
+  if (!matrixFilterSelectedPills) return;
+  if (matrixState.filterMode !== "commessa") {
+    matrixFilterSelectedPills.classList.add("hidden");
+    matrixFilterSelectedPills.innerHTML = "";
+    return;
+  }
+  const selected = state.commesse
+    .filter((c) => matrixState.filterDraft.has(c.id))
+    .slice()
+    .sort(compareCommesse);
+  if (!selected.length) {
+    matrixFilterSelectedPills.classList.add("hidden");
+    matrixFilterSelectedPills.innerHTML = "";
+    return;
+  }
+  matrixFilterSelectedPills.classList.remove("hidden");
+  matrixFilterSelectedPills.innerHTML = "";
+  selected.forEach((c) => {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "matrix-filter-pill";
+    pill.textContent = c.codice || "commessa";
+    pill.title = c.titolo ? `${c.codice} - ${c.titolo}` : c.codice || "commessa";
+    pill.addEventListener("click", () => {
+      matrixState.filterDraft.delete(c.id);
+      renderMatrixFilterList();
+    });
+    matrixFilterSelectedPills.appendChild(pill);
+  });
+}
+
 function renderMatrixFilterList() {
   if (!matrixFilterList || !matrixFilterSearch) return;
   const q = matrixFilterSearch.value.trim().toLowerCase();
   matrixFilterList.innerHTML = "";
+  renderMatrixFilterSelectedPills();
   if (matrixState.filterMode === "commessa") {
     const yearFilter = matrixFilterYear ? matrixFilterYear.value : "";
     const numeroRaw = matrixFilterNumero ? matrixFilterNumero.value.trim() : "";
@@ -1113,7 +2242,7 @@ function renderMatrixFilterList() {
         if (!Number.isFinite(cNum) || cNum !== numeroFilter) return false;
       }
       if (q) {
-        const hay = `${c.codice || ""} ${c.titolo || ""}`.toLowerCase();
+        const hay = `${c.codice || ""} ${c.titolo || ""} ${c.tipo_macchina || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -1132,8 +2261,17 @@ function renderMatrixFilterList() {
     filtered.forEach((c) => {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "filter-pill";
-      btn.textContent = `${c.codice}${c.titolo ? " - " + c.titolo : ""}`;
+      btn.className = "filter-pill matrix-filter-commessa-pill";
+      const codiceEl = document.createElement("span");
+      codiceEl.className = "matrix-filter-commessa-code";
+      codiceEl.textContent = c.codice || "-";
+      const titoloEl = document.createElement("span");
+      titoloEl.className = "matrix-filter-commessa-title";
+      titoloEl.textContent = c.titolo || "Senza descrizione";
+      const tipoEl = document.createElement("span");
+      tipoEl.className = "matrix-filter-commessa-type";
+      tipoEl.textContent = getMachineTypeDisplayLabel(c.tipo_macchina || "Altro tipo");
+      btn.append(codiceEl, titoloEl, tipoEl);
       if (matrixState.filterDraft.has(c.id)) btn.classList.add("active");
       btn.addEventListener("click", () => {
         if (matrixState.filterDraft.has(c.id)) {
@@ -1178,10 +2316,10 @@ function renderMatrixFilterList() {
 
 function getMatrixFilteredBoundsFromLoaded() {
   const filterAttivita = matrixState.selectedAttivita.size > 0;
-  const filterCommesse = matrixState.selectedCommesse.size > 0;
+  const commessaFilter = getActiveMatrixCommessaFilter();
   const visible = (matrixState.attivita || []).filter((a) => {
     if (filterAttivita && !matrixState.selectedAttivita.has(a.titolo)) return false;
-    if (filterCommesse && !matrixState.selectedCommesse.has(a.commessa_id)) return false;
+    if (commessaFilter.active && !commessaFilter.ids.has(String(a.commessa_id || ""))) return false;
     return true;
   });
   if (!visible.length) return null;
@@ -1204,7 +2342,8 @@ function getMatrixFilteredBoundsFromLoaded() {
 async function fitMatrixToFilteredActivities() {
   if (!state.session || !matrixState.selectedAttivita.size) return;
   const selectedTitles = Array.from(matrixState.selectedAttivita);
-  const selectedCommesse = Array.from(matrixState.selectedCommesse);
+  const commessaFilter = getActiveMatrixCommessaFilter();
+  const selectedCommesse = Array.from(commessaFilter.ids);
   let minStart = null;
   let maxEnd = null;
   try {
@@ -1220,9 +2359,11 @@ async function fitMatrixToFilteredActivities() {
       .in("titolo", selectedTitles)
       .order("data_fine", { ascending: false })
       .limit(1);
-    if (selectedCommesse.length) {
+    if (commessaFilter.active && selectedCommesse.length) {
       startQuery = startQuery.in("commessa_id", selectedCommesse);
       endQuery = endQuery.in("commessa_id", selectedCommesse);
+    } else if (commessaFilter.active && !selectedCommesse.length) {
+      return;
     }
     const [startRes, endRes] = await Promise.all([
       withTimeout(startQuery, FETCH_TIMEOUT_MS),
@@ -1245,11 +2386,12 @@ async function fitMatrixToFilteredActivities() {
     minStart = fallback.minStart;
     maxEnd = fallback.maxEnd;
   }
-  const fitStart = startOfWeek(minStart);
+  const fitStart = normalizeMatrixStartDate(minStart);
   const fitEnd = endOfDay(maxEnd);
-  const totalDays = Math.max(1, Math.ceil((fitEnd.getTime() - fitStart.getTime() + 1) / (24 * 60 * 60 * 1000)));
-  const weeksNeeded = Math.max(1, Math.ceil(totalDays / 7));
-  matrixState.customWeeks = Math.min(52, weeksNeeded);
+  const totalBusinessDays = Math.max(1, businessDaysBetweenInclusive(fitStart, fitEnd));
+  const weeksNeeded = Math.max(1, Math.ceil(totalBusinessDays / 5));
+  matrixState.customWeeks = clampMatrixWeeks(weeksNeeded);
+  syncMatrixViewFromWeeks(matrixState.customWeeks);
   matrixState.date = fitStart;
   if (matrixDate) matrixDate.value = formatDateInput(fitStart);
 }
@@ -1259,12 +2401,13 @@ async function applyMatrixFilter() {
     setMatrixSelectedCommesse(Array.from(matrixState.filterDraft));
   } else if (matrixState.filterMode === "attivita") {
     matrixState.selectedAttivita = new Set(matrixState.filterDraft);
+    updateMatrixAttivitaPickerLabel();
   }
   closeMatrixFilter();
   if (matrixState.filterMode === "attivita") {
-    if (matrixState.selectedAttivita.size > 0) {
+    if (MATRIX_AUTO_FIT_ON_ACTIVITY_FILTER && matrixState.selectedAttivita.size > 0) {
       await fitMatrixToFilteredActivities();
-    } else {
+    } else if (MATRIX_AUTO_FIT_ON_ACTIVITY_FILTER) {
       matrixState.customWeeks = null;
     }
     await loadMatrixAttivita();
@@ -1328,12 +2471,16 @@ function openActivityModal(attivita) {
         : [...allowed, attivita.titolo]
       : allowed;
     const orderedList = sortActivitiesByTodoOrder(list, repartoName);
-    orderedList.forEach((name) => {
+    const repartoActivities = orderedList.filter((name) => !isLavenderActivity(name) && !isAssenteTitle(name));
+    const genericActivities = orderedList.filter((name) => isLavenderActivity(name) && !isAssenteTitle(name));
+    const assenteActivities = orderedList.filter((name) => isAssenteTitle(name));
+    const appendOptionButton = (name, host = activityTitleList) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "filter-pill";
+      if (isAssenteTitle(name)) btn.classList.add("assente-pill");
       if (isLavenderActivity(name)) btn.classList.add("lavender-pill");
-      btn.textContent = name;
+      btn.textContent = getActivityDisplayLabel(name);
       if (matrixState.editingTitles.has(name)) btn.classList.add("active");
       if (!canChangeActivityTitle) {
         btn.disabled = true;
@@ -1350,8 +2497,28 @@ function openActivityModal(attivita) {
           if (!hasAssente) activityAssenzaOre.value = "";
         }
       });
-      activityTitleList.appendChild(btn);
-    });
+      host.appendChild(btn);
+    };
+    repartoActivities.forEach((name) => appendOptionButton(name));
+    if (repartoActivities.length && genericActivities.length) {
+      const divider = document.createElement("div");
+      divider.className = "activity-list-divider";
+      divider.setAttribute("aria-hidden", "true");
+      activityTitleList.appendChild(divider);
+    }
+    if (genericActivities.length) {
+      const genericGrid = document.createElement("div");
+      genericGrid.className = "activity-generic-grid";
+      activityTitleList.appendChild(genericGrid);
+      genericActivities.forEach((name) => appendOptionButton(name, genericGrid));
+    }
+    if (assenteActivities.length && (repartoActivities.length || genericActivities.length)) {
+      const divider = document.createElement("div");
+      divider.className = "activity-list-divider";
+      divider.setAttribute("aria-hidden", "true");
+      activityTitleList.appendChild(divider);
+    }
+    assenteActivities.forEach((name) => appendOptionButton(name));
   }
   activityMeta.textContent = commessaLabel
     ? `${attivita.titolo} \u2022 ${commessaLabel} \u2022 ${formatDateLocal(start)}`
@@ -1365,9 +2532,20 @@ function updateActivityQuickHourButtons() {
   const raw = String(activityDurationInput.value || "").trim();
   const value = raw === "" ? null : Number(raw);
   const isMatch = (target) => value != null && Number.isFinite(value) && Math.abs(value - target) < 0.0001;
-  if (activityHours1Btn) activityHours1Btn.classList.toggle("active", isMatch(1));
-  if (activityHours4Btn) activityHours4Btn.classList.toggle("active", isMatch(4));
-  if (activityHours8Btn) activityHours8Btn.classList.toggle("active", isMatch(8));
+  const isOne = isMatch(1);
+  const isFour = isMatch(4);
+  const isEight = isMatch(8);
+  if (activityHours1Btn) activityHours1Btn.classList.toggle("active", isOne);
+  if (activityHours4Btn) activityHours4Btn.classList.toggle("active", isFour);
+  if (activityHours8Btn) activityHours8Btn.classList.toggle("active", isEight);
+  if (activityHoursQuickButtons) {
+    let activeIndex = -1;
+    if (isOne) activeIndex = 0;
+    else if (isFour) activeIndex = 1;
+    else if (isEight) activeIndex = 2;
+    activityHoursQuickButtons.style.setProperty("--quick-hours-active-index", String(Math.max(0, activeIndex)));
+    activityHoursQuickButtons.style.setProperty("--quick-hours-active-opacity", activeIndex >= 0 ? "1" : "0");
+  }
 }
 
 function clampActivityModalPosition(left, top) {
@@ -1597,6 +2775,7 @@ async function saveActivityDuration() {
   setStatus("Activity updated.", "ok");
   closeActivityModal();
   await loadMatrixAttivita();
+  await refreshTodoRealtimeSnapshot([attivita.commessa_id]);
 }
 
 async function deleteActivity() {
@@ -1615,6 +2794,7 @@ async function deleteActivity() {
     setStatus("Activity removed.", "ok");
     closeActivityModal();
     await loadMatrixAttivita();
+    await refreshTodoRealtimeSnapshot([attivita.commessa_id]);
   });
 }
 
@@ -1633,71 +2813,206 @@ async function deleteActivityById(id) {
     }
     setStatus("Activity removed.", "ok");
     await loadMatrixAttivita();
+    await refreshTodoRealtimeSnapshot([attivita?.commessa_id]);
   });
 }
 
 async function commitResize() {
   const ctx = matrixState.resizing;
   if (!ctx) return;
-  if (ctx.previewBar) {
+  matrixState.resizing = null;
+  clearMatrixResizeTargetCell(ctx);
+  if (ctx.originalBar && !ctx.usesOriginalBarForResize) {
+    ctx.originalBar.style.opacity = "0";
+    ctx.originalBar.style.pointerEvents = "none";
+  }
+  await animateMatrixResizePreviewToAnchor(ctx);
+
+  try {
+    const targetKey = ctx.targetDayKey;
+    if (!targetKey) return;
+    const targetDate = dateFromKey(targetKey);
+    if (targetDate < ctx.startDate) return;
+    const newEnd = new Date(targetDate);
+    newEnd.setHours(ctx.endTime.h, ctx.endTime.m, ctx.endTime.s, ctx.endTime.ms);
+    const oldEndDay = ctx.oldEndDay || startOfDay(new Date(ctx.attivita.data_fine));
+    const newEndDay = startOfDay(newEnd);
+    const deltaDays = businessDayDiff(oldEndDay, newEndDay);
+    let dependentActivities = null;
+    let dependentToShift = null;
+    if (matrixState.autoShift && isPhaseKey(ctx.attivita.titolo) && deltaDays !== 0) {
+      dependentActivities = await getDependentActivitiesForKey(ctx.attivita);
+      if (dependentActivities == null) return;
+      dependentToShift = getDependentActivitiesToShift(ctx.attivita, deltaDays, dependentActivities);
+    }
+    const excludeIds =
+      dependentToShift && dependentToShift.length
+        ? [ctx.attivita.id, ...dependentToShift.map((a) => a.id)]
+        : [ctx.attivita.id];
+    if (matrixState.autoShift && deltaDays > 0) {
+      const extStart = addDays(oldEndDay, 1);
+      const overlap = await hasOverlapRange(ctx.attivita.risorsa_id, extStart, newEndDay, ctx.attivita.id);
+      if (overlap == null) return;
+      if (overlap) {
+        const ok = await shiftRisorsa(ctx.attivita.risorsa_id, extStart, deltaDays, excludeIds);
+        if (!ok) return;
+      }
+    } else if (matrixState.autoShift && deltaDays < 0) {
+      const cutDate = addDays(oldEndDay, 1);
+      const overlap = await hasOverlapRange(ctx.attivita.risorsa_id, cutDate, oldEndDay, ctx.attivita.id);
+      if (overlap == null) return;
+      if (overlap) {
+        const ok = await shiftRisorsa(ctx.attivita.risorsa_id, cutDate, deltaDays, excludeIds);
+        if (!ok) return;
+      }
+    }
+    const { error } = await supabase
+      .from("attivita")
+      .update({ data_fine: newEnd.toISOString() })
+      .eq("id", ctx.attivita.id);
+    if (error) {
+      setStatus(`Update error: ${error.message}`, "error");
+      return;
+    }
+    if (isPhaseKey(ctx.attivita.titolo) && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
+      const ok = await shiftDependentPhases(ctx.attivita, deltaDays, dependentToShift);
+      if (!ok) return;
+    }
+    let telaioPlannedSynced = true;
+    if (isTelaioActivityTitle(ctx.attivita.titolo) && ctx.attivita.commessa_id) {
+      telaioPlannedSynced = await syncTelaioPlannedDateFromMatrix(ctx.attivita.commessa_id, newEnd);
+      const commessa = findCommessaInState(ctx.attivita.commessa_id);
+      await warnTelaioPlannedMismatch(
+        ctx.attivita.commessa_id,
+        commessa?.data_conferma_consegna_telaio || null,
+        { telaioEndDay: startOfDay(newEnd) }
+      );
+    }
+    if (!telaioPlannedSynced) {
+      setStatus("Duration aggiornata, ma non ho potuto aggiornare la data telaio pianificata.", "error");
+    } else {
+      setStatus("Duration updated.", "ok");
+    }
+    await loadMatrixAttivita();
+    await refreshTodoRealtimeSnapshot([ctx.attivita.commessa_id]);
+  } finally {
+    cleanupMatrixResizeVisual(ctx);
+  }
+}
+
+function clearMatrixResizeTargetCell(ctx = matrixState.resizing) {
+  if (!ctx?.targetCell) return;
+  ctx.targetCell.classList.remove("resize-target-col");
+  ctx.targetCell = null;
+}
+
+function setMatrixResizeTargetCell(ctx, cell) {
+  if (!ctx || !cell) return;
+  if (ctx.targetCell === cell) return;
+  clearMatrixResizeTargetCell(ctx);
+  cell.classList.add("resize-target-col");
+  ctx.targetCell = cell;
+}
+
+function getMatrixResizeAnchoredMetrics(ctx) {
+  if (!ctx?.layerRect || !ctx?.startCellRect) return null;
+  const targetCell =
+    ctx.targetCell ||
+    (ctx.rowEl && ctx.targetDayKey ? ctx.rowEl.querySelector(`.matrix-cell[data-day="${ctx.targetDayKey}"]`) : null);
+  if (!targetCell) return null;
+  const targetRect = targetCell.getBoundingClientRect();
+  const left = ctx.startCellRect.left - ctx.layerRect.left;
+  const maxRight = ctx.layerRect.right - ctx.layerRect.left;
+  const anchoredRight = Math.max(left, Math.min(targetRect.right - ctx.layerRect.left, maxRight));
+  const width = Math.max(0, anchoredRight - left);
+  return { left, width };
+}
+
+function animateMatrixResizePreviewToAnchor(ctx) {
+  return new Promise((resolve) => {
+    const bar = ctx?.previewBar;
+    if (!bar) return resolve();
+    const metrics = getMatrixResizeAnchoredMetrics(ctx);
+    if (!metrics) return resolve();
+    const currentWidth = Number.parseFloat(bar.style.width || "0");
+    if (!Number.isFinite(currentWidth)) return resolve();
+    if (Math.abs(currentWidth - metrics.width) < 0.5) {
+      bar.style.left = `${metrics.left}px`;
+      bar.style.width = `${metrics.width}px`;
+      return resolve();
+    }
+    bar.style.left = `${metrics.left}px`;
+    bar.style.transition = "width 120ms cubic-bezier(0.22, 1, 0.36, 1)";
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      bar.removeEventListener("transitionend", done);
+      bar.style.transition = "none";
+      resolve();
+    };
+    bar.addEventListener("transitionend", done);
+    window.setTimeout(done, 170);
+    requestAnimationFrame(() => {
+      bar.style.width = `${metrics.width}px`;
+    });
+  });
+}
+
+function cleanupMatrixResizeVisual(ctx) {
+  if (!ctx) return;
+  clearMatrixResizeTargetCell(ctx);
+  if (ctx.previewBar && !ctx.usesOriginalBarForResize) {
     ctx.previewBar.remove();
     ctx.previewBar = null;
   }
+  if (ctx.usesOriginalBarForResize && ctx.originalBar) {
+    const s = ctx.originalBar.style;
+    const prev = ctx.originalBarInitialStyle || {};
+    s.position = prev.position || "";
+    s.top = prev.top || "";
+    s.left = prev.left || "";
+    s.width = prev.width || "";
+    s.height = prev.height || "";
+    s.marginTop = prev.marginTop || "";
+    s.gridColumn = prev.gridColumn || "";
+    s.zIndex = prev.zIndex || "";
+    s.transition = prev.transition || "";
+  }
   if (ctx.originalBar) {
     ctx.originalBar.classList.remove("resizing");
+    ctx.originalBar.style.removeProperty("opacity");
+    ctx.originalBar.style.removeProperty("pointer-events");
   }
-  matrixState.resizing = null;
-  const targetKey = ctx.targetDayKey;
-  if (!targetKey) return;
-  const targetDate = dateFromKey(targetKey);
-  if (targetDate < ctx.startDate) return;
-  const newEnd = new Date(targetDate);
-  newEnd.setHours(ctx.endTime.h, ctx.endTime.m, ctx.endTime.s, ctx.endTime.ms);
-  const oldEndDay = ctx.oldEndDay || startOfDay(new Date(ctx.attivita.data_fine));
-  const newEndDay = startOfDay(newEnd);
-  const deltaDays = businessDayDiff(oldEndDay, newEndDay);
-  let dependentActivities = null;
-  let dependentToShift = null;
-  if (matrixState.autoShift && isPhaseKey(ctx.attivita.titolo) && deltaDays !== 0) {
-    dependentActivities = await getDependentActivitiesForKey(ctx.attivita);
-    if (dependentActivities == null) return;
-    dependentToShift = getDependentActivitiesToShift(ctx.attivita, deltaDays, dependentActivities);
+}
+
+function resolveMatrixResizeTargetCell(ctx, pointerClientX) {
+  if (!ctx) return null;
+  const dayCells = Array.isArray(ctx.dayCells) && ctx.dayCells.length
+    ? ctx.dayCells
+    : Array.from((ctx.rowEl || document).querySelectorAll(".matrix-cell[data-day]"));
+  if (!dayCells.length) return null;
+
+  let startIdx = Number.isInteger(ctx.startCellIndex) ? ctx.startCellIndex : 0;
+  startIdx = Math.max(0, Math.min(startIdx, dayCells.length - 1));
+  let initialIdx = Number.isInteger(ctx.initialTargetIndex) ? ctx.initialTargetIndex : startIdx;
+  initialIdx = Math.max(startIdx, Math.min(initialIdx, dayCells.length - 1));
+
+  const grabX = Number.isFinite(ctx.dragStartX) ? ctx.dragStartX : pointerClientX;
+  if (Math.abs(pointerClientX - grabX) < 6) {
+    return dayCells[initialIdx];
   }
-  const excludeIds =
-    dependentToShift && dependentToShift.length
-      ? [ctx.attivita.id, ...dependentToShift.map((a) => a.id)]
-      : [ctx.attivita.id];
-  if (matrixState.autoShift && deltaDays > 0) {
-    const extStart = addDays(oldEndDay, 1);
-    const overlap = await hasOverlapRange(ctx.attivita.risorsa_id, extStart, newEndDay, ctx.attivita.id);
-    if (overlap == null) return;
-    if (overlap) {
-      const ok = await shiftRisorsa(ctx.attivita.risorsa_id, extStart, deltaDays, excludeIds);
-      if (!ok) return;
-    }
-  } else if (matrixState.autoShift && deltaDays < 0) {
-    const cutDate = addDays(oldEndDay, 1);
-    const overlap = await hasOverlapRange(ctx.attivita.risorsa_id, cutDate, oldEndDay, ctx.attivita.id);
-    if (overlap == null) return;
-    if (overlap) {
-      const ok = await shiftRisorsa(ctx.attivita.risorsa_id, cutDate, deltaDays, excludeIds);
-      if (!ok) return;
-    }
+
+  // Shift to next day only after passing half of the next cell.
+  let targetIdx = startIdx;
+  for (let i = startIdx + 1; i < dayCells.length; i += 1) {
+    const rect = dayCells[i].getBoundingClientRect();
+    const halfX = rect.left + rect.width / 2;
+    if (pointerClientX >= halfX) targetIdx = i;
+    else break;
   }
-  const { error } = await supabase
-    .from("attivita")
-    .update({ data_fine: newEnd.toISOString() })
-    .eq("id", ctx.attivita.id);
-  if (error) {
-    setStatus(`Update error: ${error.message}`, "error");
-    return;
-  }
-  if (isPhaseKey(ctx.attivita.titolo) && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
-    const ok = await shiftDependentPhases(ctx.attivita, deltaDays, dependentToShift);
-    if (!ok) return;
-  }
-  setStatus("Duration updated.", "ok");
-  await loadMatrixAttivita();
+
+  return dayCells[targetIdx];
 }
 
 function openAssignModal() {
@@ -2075,7 +3390,11 @@ let authSyncInProgress = false;
 async function syncSignedIn(session) {
   if (!session || authSyncInProgress) return;
   authSyncInProgress = true;
+  matrixBootstrapSyncInProgress = true;
   state.session = session;
+  matrixState.initialRenderStabilized = false;
+  matrixState.initialRenderStabilizeAttempts = 0;
+  cancelPendingMatrixInitialRender();
   debugLog(`syncSignedIn start: user=${session.user?.id || "n/a"}`);
   try {
     debugLog("syncSignedIn step: loadProfile");
@@ -2094,20 +3413,28 @@ async function syncSignedIn(session) {
     await loadUtenti();
     debugLog("syncSignedIn step: loadCommesse");
     await loadCommesse();
+    debugLog("syncSignedIn step: loadMachineTypes");
+    await loadMachineTypes();
     calendarDate.value = formatDateInput(calendarState.date);
     debugLog("syncSignedIn step: loadAttivita");
     await loadAttivita();
+    if (!MATRIX_MOVEMENT_ENABLED) {
+      resetMatrixMovementBaseline();
+    }
     matrixDate.value = formatDateInput(matrixState.date);
     debugLog("syncSignedIn step: loadMatrixAttivita");
-    await loadMatrixAttivita();
+    await loadMatrixAttivita({ deferRender: true });
     debugLog("syncSignedIn step: setupRealtime");
     await setupRealtime();
+    matrixBootstrapSyncInProgress = false;
+    scheduleMatrixRenderStabilized();
     startTodoVisualRefreshLoop();
     debugLog("syncSignedIn complete");
   } catch (err) {
     debugLog(`syncSignedIn error: ${err?.message || err}`);
     setStatus(`Login sync error: ${err?.message || err}`, "error");
   } finally {
+    matrixBootstrapSyncInProgress = false;
     authSyncInProgress = false;
   }
 }
@@ -2115,6 +3442,7 @@ async function syncSignedIn(session) {
 function syncSignedOut(options = {}) {
   const showStatus = options.showStatus !== false;
   debugLog("syncSignedOut");
+  matrixBootstrapSyncInProgress = false;
   stopTodoVisualRefreshLoop();
   state.session = null;
   state.profile = null;
@@ -2123,6 +3451,10 @@ function syncSignedOut(options = {}) {
   state.todoOverridesMap = new Map();
   state.todoClientFlowMap = new Map();
   state.todoClientFlowLoadedCommesse = new Set();
+  state.machineTypes = DEFAULT_MACHINE_TYPES.slice();
+  matrixState.initialRenderStabilized = false;
+  matrixState.initialRenderStabilizeAttempts = 0;
+  cancelPendingMatrixInitialRender();
   authStatus.textContent = "Non autenticato";
   logoutBtn.classList.add("hidden");
   if (setPasswordBtn) setPasswordBtn.classList.add("hidden");
@@ -2130,10 +3462,21 @@ function syncSignedOut(options = {}) {
   if (permissionsLink) permissionsLink.classList.add("hidden");
   if (reportsLink) reportsLink.classList.add("hidden");
   if (authActions) authActions.classList.remove("is-authenticated");
+  refreshMachineTypeSelects({
+    newType: "",
+    newVariant: "standard",
+    detailType: "",
+    detailVariant: "standard",
+  });
   if (authDot) authDot.classList.add("hidden");
   setRoleBadge("");
   setWriteAccess(false);
   commesseList.innerHTML = "";
+  if (commesseSeqAlert) {
+    commesseSeqAlert.textContent = "";
+    commesseSeqAlert.classList.add("hidden");
+    commesseSeqAlert.classList.remove("error");
+  }
   clearSelection();
   calendarGrid.innerHTML = "";
   matrixGrid.innerHTML = "";
@@ -2264,6 +3607,7 @@ function setWriteAccess(canWrite) {
   if (openNewCommessaBtn) openNewCommessaBtn.disabled = disabled;
   if (matrixCommessa) matrixCommessa.disabled = disabled;
   if (matrixAttivita) matrixAttivita.disabled = disabled;
+  refreshDetailTelaioOrderAccess();
 }
 
 async function signIn() {
@@ -2419,6 +3763,8 @@ function clearSelection() {
   if (d.telaio_ordinato) {
     setTelaioOrdinatoButton(d.telaio_ordinato, false, false, d.data_consegna_telaio_effettiva || null);
   }
+  refreshDetailTelaioOrderAccess();
+  updateDetailFieldCompletionUI();
   setDetailSnapshot();
   if (repartiList) repartiList.innerHTML = "";
   if (commessaDetailModal) commessaDetailModal.classList.add("hidden");
@@ -2429,9 +3775,186 @@ function formatDate(dateStr) {
   return dateStr.split("T")[0];
 }
 
+function normalizeMachineTypeValue(value) {
+  return String(value || "").trim();
+}
+
+function normalizeMachineTypeLookup(value) {
+  return normalizeMachineTypeValue(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function getMachineTypeDisplayLabel(value) {
+  const raw = normalizeMachineTypeValue(value) || "Altro tipo";
+  const key = normalizeMachineTypeLookup(raw);
+  if (key === "miniboosterswiss" || key === "miniboosterswss") return "MBS";
+  return raw;
+}
+
+function normalizeMachineVariantValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || "standard";
+}
+
+function supportsCustomVariantForMachineType(typeValue) {
+  const key = normalizeMachineTypeLookup(typeValue);
+  if (!key) return false;
+  return CUSTOM_VARIANT_MACHINE_TYPES.some(
+    (item) => normalizeMachineTypeLookup(item) === key
+  );
+}
+
+function sanitizeMachineVariantForType(typeValue, variantValue) {
+  const normalizedVariant = normalizeMachineVariantValue(variantValue || "standard");
+  if (normalizedVariant === "custom" && !supportsCustomVariantForMachineType(typeValue)) {
+    return "standard";
+  }
+  return normalizedVariant;
+}
+
+function collectMachineTypeOptions() {
+  const list = [];
+  const seen = new Set();
+  const add = (raw) => {
+    const value = normalizeMachineTypeValue(raw);
+    if (!value) return;
+    const key = value.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push(value);
+  };
+  (state.machineTypes || []).forEach(add);
+  DEFAULT_MACHINE_TYPES.forEach(add);
+  (state.commesse || []).forEach((row) => add(row?.tipo_macchina));
+  add("Altro tipo");
+  return list;
+}
+
+function setMachineTypeSelectOptions(selectEl, options, preferredValue = "", includePlaceholder = false) {
+  if (!selectEl) return;
+  const currentValue = normalizeMachineTypeValue(selectEl.value);
+  const desiredValue = normalizeMachineTypeValue(preferredValue || currentValue);
+  const values = Array.isArray(options) ? options.slice() : [];
+  if (desiredValue && !values.some((item) => item.toLowerCase() === desiredValue.toLowerCase())) {
+    values.push(desiredValue);
+  }
+
+  selectEl.innerHTML = "";
+  if (includePlaceholder) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Seleziona tipologia...";
+    selectEl.appendChild(placeholder);
+  }
+  values.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    selectEl.appendChild(option);
+  });
+  if (desiredValue) {
+    selectEl.value = desiredValue;
+  } else if (includePlaceholder) {
+    selectEl.value = "";
+  } else if (values.length) {
+    selectEl.value = values[0];
+  }
+}
+
+function setMachineVariantSelectOptions(selectEl, machineTypeValue = "", preferredValue = "") {
+  if (!selectEl) return;
+  const currentValue = normalizeMachineVariantValue(selectEl.value || "standard");
+  const desiredValue = sanitizeMachineVariantForType(
+    machineTypeValue,
+    preferredValue || currentValue
+  );
+  const baseOptions = [{ value: "standard", label: "Standard" }];
+  if (supportsCustomVariantForMachineType(machineTypeValue)) {
+    baseOptions.push({ value: "custom", label: "Custom" });
+  }
+  if (!baseOptions.some((item) => item.value === desiredValue)) {
+    const label = desiredValue.charAt(0).toUpperCase() + desiredValue.slice(1);
+    baseOptions.push({ value: desiredValue, label });
+  }
+  selectEl.innerHTML = "";
+  baseOptions.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    selectEl.appendChild(option);
+  });
+  selectEl.value = desiredValue;
+}
+
+function refreshMachineTypeSelects(options = {}) {
+  const typeOptions = collectMachineTypeOptions();
+  const nextNewType = options.newType ?? n.tipo_macchina?.value ?? "";
+  const nextDetailType = options.detailType ?? d.tipo_macchina?.value ?? "";
+  setMachineTypeSelectOptions(
+    n.tipo_macchina,
+    typeOptions,
+    nextNewType,
+    true
+  );
+  setMachineTypeSelectOptions(
+    d.tipo_macchina,
+    typeOptions,
+    nextDetailType,
+    true
+  );
+  setMachineVariantSelectOptions(
+    n.variante_macchina,
+    nextNewType,
+    options.newVariant ?? n.variante_macchina?.value ?? "standard"
+  );
+  setMachineVariantSelectOptions(
+    d.variante_macchina,
+    nextDetailType,
+    options.detailVariant ?? d.variante_macchina?.value ?? "standard"
+  );
+}
+
+async function loadMachineTypes() {
+  if (!state.session) {
+    state.machineTypes = DEFAULT_MACHINE_TYPES.slice();
+    refreshMachineTypeSelects();
+    return;
+  }
+  let rows = null;
+  let error = null;
+  if (!PREFER_REST_ON_RELOAD) {
+    try {
+      const result = await withTimeout(
+        supabase.from("motore_tipologie").select("nome").order("nome", { ascending: true }),
+        FETCH_TIMEOUT_MS
+      );
+      rows = result.data;
+      error = result.error;
+    } catch (err) {
+      error = err;
+    }
+  }
+  if (!rows || error) {
+    rows = await fetchTableViaRest("motore_tipologie", "select=nome&order=nome.asc");
+  }
+  if (!rows || !Array.isArray(rows) || !rows.length) {
+    state.machineTypes = DEFAULT_MACHINE_TYPES.slice();
+    refreshMachineTypeSelects();
+    return;
+  }
+  state.machineTypes = rows
+    .map((row) => normalizeMachineTypeValue(row?.nome))
+    .filter(Boolean);
+  refreshMachineTypeSelects();
+}
+
 function openImportModal() {
   if (!state.canWrite) return;
   importModal.classList.remove("hidden");
+  resetImportFeedback();
   importTextarea.focus();
   updateImportPreview();
 }
@@ -2457,6 +3980,10 @@ function openCommessaCreateModal() {
   if (!commessaCreateModal) return;
   commessaCreateModal.classList.remove("hidden");
   if (newForm) newForm.reset();
+  refreshMachineTypeSelects({
+    newType: "",
+    newVariant: "standard",
+  });
   if (n.anno && !n.anno.value) n.anno.value = String(new Date().getFullYear());
   updateNumeroWarning(n.anno, n.numero, newNumeroWarning);
   updateCodicePreview(n.anno, n.numero, newCodicePreview);
@@ -2660,7 +4187,7 @@ function calculateWorkload() {
       if (!isDateOk(target)) return null;
       const targetDay = startOfDay(target);
       if (targetDay < rangeStart || targetDay > rangeFinish) return null;
-      const plannedRaw = c.data_consegna_telaio_effettiva || "";
+      const plannedRaw = c.data_conferma_consegna_telaio || "";
       const planned = plannedRaw ? new Date(plannedRaw) : null;
       const plannedDay = isDateOk(planned) ? startOfDay(planned) : null;
       return {
@@ -2759,7 +4286,7 @@ async function jumpToMatrixActivity(commessaId, startTs, activityId, risorsaId) 
       }
     }
   }
-  matrixState.date = startOfWeek(date);
+  matrixState.date = normalizeMatrixStartDate(date);
   if (matrixDate) matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
   const activityKey = activityId ? String(activityId) : "";
@@ -2922,6 +4449,38 @@ function downloadJson(data, filename) {
   URL.revokeObjectURL(url);
 }
 
+async function copyTextToClipboard(text) {
+  const payload = String(text || "");
+  if (!payload) return false;
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(payload);
+    return true;
+  }
+  const temp = document.createElement("textarea");
+  temp.value = payload;
+  temp.setAttribute("readonly", "");
+  temp.style.position = "fixed";
+  temp.style.opacity = "0";
+  temp.style.pointerEvents = "none";
+  document.body.appendChild(temp);
+  temp.focus();
+  temp.select();
+  const ok = document.execCommand("copy");
+  temp.remove();
+  if (!ok) throw new Error("Copy command not available");
+  return true;
+}
+
+async function handleCopyImportHeader(text, label) {
+  try {
+    await copyTextToClipboard(text);
+    showToast(`Header copiato: ${label}.`, "ok");
+  } catch (err) {
+    setStatus(`Copia header non riuscita: ${err?.message || err}`, "error");
+    showToast("Copia header non riuscita.", "error");
+  }
+}
+
 async function fetchBackupTable(name) {
   let data = null;
   let error = null;
@@ -2971,6 +4530,13 @@ async function handleBackupExport() {
       version: 1,
       exportedAt: new Date().toISOString(),
       tables,
+      local: BACKUP_LOCAL_STORAGE_KEYS.reduce((acc, key) => {
+        try {
+          const value = localStorage.getItem(key);
+          if (value != null) acc[key] = value;
+        } catch (_err) {}
+        return acc;
+      }, {}),
       warnings,
     };
     const stamp = new Date().toISOString().slice(0, 10);
@@ -2993,6 +4559,7 @@ async function handleBackupExport() {
 
 function summarizeBackupPayload(payload) {
   const tables = payload?.tables || {};
+  const local = payload?.local && typeof payload.local === "object" ? payload.local : {};
   const lines = [];
   let totalRows = 0;
   BACKUP_TABLES.forEach((table) => {
@@ -3003,9 +4570,12 @@ function summarizeBackupPayload(payload) {
     }
   });
   if (!lines.length) {
+    const localCount = Object.keys(local).length;
+    if (localCount) return `Backup locale trovato (${localCount} chiavi), ma nessuna tabella dati valida.`;
     return "No usable tables found in the backup.";
   }
-  return `Tables: ${lines.join(", ")}. Total rows: ${totalRows}.`;
+  const localCount = Object.keys(local).length;
+  return `Tables: ${lines.join(", ")}. Total rows: ${totalRows}. Local keys: ${localCount}.`;
 }
 
 async function handleBackupFileChange() {
@@ -3080,6 +4650,17 @@ async function handleBackupImport() {
         }
       }
     }
+    const local = backupPayload?.local;
+    if (local && typeof local === "object") {
+      BACKUP_LOCAL_STORAGE_KEYS.forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(local, key)) return;
+        try {
+          const value = local[key];
+          if (value == null) localStorage.removeItem(key);
+          else localStorage.setItem(key, String(value));
+        } catch (_err) {}
+      });
+    }
     if (failures.length) {
       backupImportSummary.textContent = `Import completed with ${failures.length} errors.`;
       showToast("Import completed with errors.", "error");
@@ -3106,6 +4687,7 @@ async function handleBackupImport() {
 
 function closeImportModal() {
   importModal.classList.add("hidden");
+  resetImportFeedback();
 }
 
 function closeImportDatesModal() {
@@ -3124,6 +4706,33 @@ function detectDelimiter(text) {
   return ",";
 }
 
+function resetImportFeedback() {
+  if (importProgressWrap) importProgressWrap.classList.add("hidden");
+  if (importProgressBar) importProgressBar.style.width = "0%";
+  if (importProgressText) importProgressText.textContent = "0%";
+  if (importResult) {
+    importResult.classList.add("hidden");
+    importResult.classList.remove("ok", "error");
+    importResult.textContent = "";
+  }
+}
+
+function updateImportProgress(percent = 0, note = "") {
+  const safe = Math.max(0, Math.min(100, Number(percent) || 0));
+  if (importProgressWrap) importProgressWrap.classList.remove("hidden");
+  if (importProgressBar) importProgressBar.style.width = `${safe}%`;
+  if (importProgressText) {
+    importProgressText.textContent = note ? `${safe}% · ${note}` : `${safe}%`;
+  }
+}
+
+function showImportResult(message, tone = "ok") {
+  if (!importResult) return;
+  importResult.classList.remove("hidden", "ok", "error");
+  importResult.classList.add(tone === "error" ? "error" : "ok");
+  importResult.textContent = message;
+}
+
 function parseImportRows(text) {
   const cleaned = text.trim();
   if (!cleaned) return { rows: [], errors: [], total: 0 };
@@ -3132,26 +4741,74 @@ function parseImportRows(text) {
   let startIndex = 0;
   if (lines.length) {
     const first = lines[0].toLowerCase();
-    if (first.includes("anno") || first.includes("numero") || first.includes("descr")) {
+    if (first.includes("anno") || first.includes("numero") || first.includes("descr") || first.includes("tipo")) {
       startIndex = 1;
     }
   }
 
   const rows = [];
   const errors = [];
+  const expectedTypes = Array.from(
+    new Set(
+      [...(state.machineTypes || []), ...DEFAULT_MACHINE_TYPES, "Altro tipo"]
+        .map((value) => normalizeMachineTypeValue(value))
+        .filter(Boolean)
+    )
+  );
+  const expectedTypeMap = new Map(
+    expectedTypes.map((typeValue) => [normalizeMachineTypeLookup(typeValue), typeValue])
+  );
+  const expectedTypesLabel = expectedTypes.join(", ");
+  const parseMachineImportCell = (rawValue) => {
+    const raw = normalizeMachineTypeValue(rawValue || "");
+    if (!raw) {
+      return { ok: false, reason: "missing" };
+    }
+    const hasSpecialTag = /\b(spec|speciale|spaciale|special)\b/i.test(raw);
+    const cleanedType = raw
+      .replace(/\b(spec|speciale|spaciale|special)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleanedType) {
+      return { ok: false, reason: "missing" };
+    }
+    const canonicalType = expectedTypeMap.get(normalizeMachineTypeLookup(cleanedType)) || "";
+    if (!canonicalType) {
+      return { ok: false, reason: "unknown", value: cleanedType };
+    }
+    if (hasSpecialTag && !supportsCustomVariantForMachineType(canonicalType)) {
+      return { ok: false, reason: "spec_not_supported", value: canonicalType };
+    }
+    return {
+      ok: true,
+      type: canonicalType,
+      variant: hasSpecialTag ? "custom" : "standard",
+    };
+  };
+
   for (let i = startIndex; i < lines.length; i++) {
     const cols = lines[i]
       .split(delimiter)
       .map((c) => c.trim().replace(/^"(.*)"$/, "$1"));
 
-    if (cols.length < 3) {
-      errors.push(`Riga ${i + 1}: servono anno, numero, descrizione`);
+    if (cols.length < 4) {
+      errors.push(`Riga ${i + 1}: manca tipo_macchina (4a colonna obbligatoria).`);
       continue;
     }
 
     const annoRaw = cols[0];
     const numeroRaw = cols[1];
-    const descrizione = cols.slice(2).join(" ").trim();
+    const descrizione = String(cols[2] || "").trim();
+    const descrizioneKey = descrizione
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim();
+    const skipDescrizione = !descrizione || /^(0+|zero|null|nullo)$/.test(descrizioneKey);
+    if (skipDescrizione) {
+      continue;
+    }
+    const machineCell = parseMachineImportCell(cols[3] || "");
 
     if (!/^\d{4}$/.test(annoRaw)) {
       errors.push(`Riga ${i + 1}: anno non valido`);
@@ -3161,21 +4818,47 @@ function parseImportRows(text) {
       errors.push(`Riga ${i + 1}: numero non valido`);
       continue;
     }
+    if (!machineCell.ok) {
+      if (machineCell.reason === "missing") {
+        errors.push(`Riga ${i + 1}: tipo_macchina mancante. Tipologie attese: ${expectedTypesLabel}`);
+      } else if (machineCell.reason === "spec_not_supported") {
+        errors.push(`Riga ${i + 1}: "${machineCell.value}" non supporta variante SPEC/custom.`);
+      } else {
+        errors.push(
+          `Riga ${i + 1}: tipo_macchina "${machineCell.value}" non riconosciuto. Tipologie attese: ${expectedTypesLabel}`
+        );
+      }
+      continue;
+    }
 
     const anno = Number(annoRaw);
     const numero = Number(numeroRaw);
     const codice = `${anno}_${numero}`;
     const titolo = descrizione || null;
+    const variante_macchina = machineCell.variant;
 
-    rows.push({ codice, titolo, anno, numero });
+    rows.push({
+      codice,
+      titolo,
+      anno,
+      numero,
+      tipo_macchina: machineCell.type,
+      variante_macchina,
+    });
   }
 
   return { rows, errors, total: lines.length - startIndex };
 }
 
 function updateImportPreview() {
+  resetImportFeedback();
   const { rows, errors, total } = parseImportRows(importTextarea.value);
-  const sample = rows.slice(0, 3).map((r) => `${r.codice} - ${r.titolo || "Senza titolo"}`);
+  const sample = rows
+    .slice(0, 3)
+    .map(
+      (r) =>
+        `${r.codice} - ${r.titolo || "Senza titolo"} - ${r.tipo_macchina || "Altro tipo"} (${r.variante_macchina || "standard"})`
+    );
   const errorText = errors.length ? `Errori: ${errors.slice(0, 3).join(" | ")}` : "Nessun errore rilevato.";
   const summary =
     `Righe riconosciute: ${rows.length}/${total}. ` +
@@ -3267,11 +4950,18 @@ function updateImportDatesPreview() {
         overwrites.push(`${key} (ordine telaio)`);
       }
     }
-    if (row.stimato && commessa.data_consegna_telaio_effettiva) {
-      const existing = formatDate(commessa.data_consegna_telaio_effettiva);
+    if (row.stimato && commessa.data_conferma_consegna_telaio) {
+      const existing = formatDate(commessa.data_conferma_consegna_telaio);
       const incoming = formatDateInput(row.stimato);
       if (existing && incoming && existing !== incoming) {
         overwrites.push(`${key} (ordine telaio stimato)`);
+      }
+    }
+    if (row.effettivo && commessa.data_consegna_telaio_effettiva) {
+      const existing = formatDate(commessa.data_consegna_telaio_effettiva);
+      const incoming = formatDateInput(row.effettivo);
+      if (existing && incoming && existing !== incoming) {
+        overwrites.push(`${key} (ordine telaio effettivo)`);
       }
     }
     if (row.prelievo && commessa.data_prelievo) {
@@ -3295,7 +4985,15 @@ function updateImportDatesPreview() {
         overwrites.push(`${key} (consegna macchina)`);
       }
     }
-    if (row.ingresso || row.ordine || row.stimato || row.prelievo || row.consegna || row.ordinato != null) {
+    if (
+      row.ingresso ||
+      row.ordine ||
+      row.stimato ||
+      row.effettivo ||
+      row.prelievo ||
+      row.consegna ||
+      row.ordinato != null
+    ) {
       willUpdate = true;
       toUpdate.push(key);
     } else {
@@ -3321,6 +5019,7 @@ function updateImportDatesPreview() {
   const hasIngresso = rows.some((r) => r.ingressoRaw);
   const hasPrelievo = rows.some((r) => r.prelievoRaw);
   const hasOrdinato = rows.some((r) => r.ordinatoRaw || r.ordinatoRaw === "0");
+  const hasEffettivo = rows.some((r) => r.effettivoRaw);
   const headerCols = [
     "Codice",
     ...(hasIngresso ? ["Ingresso ordine"] : []),
@@ -3328,6 +5027,7 @@ function updateImportDatesPreview() {
     "Ordine telaio stimato",
     ...(hasPrelievo ? ["Prelievo materiali"] : []),
     ...(hasOrdinato ? ["Ordinato"] : []),
+    ...(hasEffettivo ? ["Ordine telaio effettivo"] : []),
     "Consegna macchina",
   ];
   const previewRows = rows.slice(0, 8);
@@ -3340,6 +5040,7 @@ function updateImportDatesPreview() {
         row.stimatoRaw || "",
         ...(hasPrelievo ? [row.prelievoRaw || ""] : []),
         ...(hasOrdinato ? [row.ordinatoRaw || ""] : []),
+        ...(hasEffettivo ? [row.effettivoRaw || ""] : []),
         row.consegnaRaw || "",
       ];
       return `<tr>${cells.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`;
@@ -3478,13 +5179,23 @@ async function handleImportDates() {
       skipped.push(`${key} non trovata`);
       return;
     }
-    const payload = {};
+    let payload = {};
     if (row.ingresso) payload.data_ingresso = formatDateInput(row.ingresso);
     if (row.ordine) payload.data_ordine_telaio = formatDateInput(row.ordine);
-    if (row.stimato) payload.data_consegna_telaio_effettiva = formatDateInput(row.stimato);
+    if (row.stimato) payload.data_conferma_consegna_telaio = formatDateInput(row.stimato);
+    if (row.effettivo) payload.data_consegna_telaio_effettiva = formatDateInput(row.effettivo);
     if (row.prelievo) payload.data_prelievo = formatDateInput(row.prelievo);
-    if (row.ordinato != null) payload.telaio_consegnato = row.ordinato;
+    if (row.ordinato != null) {
+      payload.telaio_consegnato = row.ordinato;
+      if (!row.ordinato) payload.data_consegna_telaio_effettiva = null;
+    }
     if (row.consegna) payload.data_consegna_macchina = formatDateInput(row.consegna);
+    const consistency = ensureTelaioOrderPayloadConsistency(commessa.id, payload, { notify: false });
+    if (!consistency.ok) {
+      skipped.push(`${key} ordinato senza data telaio`);
+      return;
+    }
+    payload = consistency.payload;
     if (!Object.keys(payload).length) {
       skipped.push(`${key} senza date valide`);
       return;
@@ -3755,6 +5466,10 @@ function parseImportDateRows(text) {
           map.ordinato = index;
           return;
         }
+        if (col.includes("effett")) {
+          map.effettivo = index;
+          return;
+        }
         if (col.includes("consegna") || col.includes("delivery")) {
           map.consegna = index;
           return;
@@ -3786,6 +5501,7 @@ function parseImportDateRows(text) {
     let ingressoCell = "";
     let ordineCell = "";
     let stimatoCell = "";
+    let effettivoCell = "";
     let prelievoCell = "";
     let ordinatoCell = "";
     let consegnaCell = "";
@@ -3794,6 +5510,7 @@ function parseImportDateRows(text) {
       ingressoCell = headerMap.ingresso != null ? cols[headerMap.ingresso] || "" : "";
       ordineCell = headerMap.ordine != null ? cols[headerMap.ordine] || "" : "";
       stimatoCell = headerMap.stimato != null ? cols[headerMap.stimato] || "" : "";
+      effettivoCell = headerMap.effettivo != null ? cols[headerMap.effettivo] || "" : "";
       prelievoCell = headerMap.prelievo != null ? cols[headerMap.prelievo] || "" : "";
       ordinatoCell = headerMap.ordinato != null ? cols[headerMap.ordinato] || "" : "";
       consegnaCell = headerMap.consegna != null ? cols[headerMap.consegna] || "" : "";
@@ -3810,18 +5527,37 @@ function parseImportDateRows(text) {
       if (hasIngresso && hasPrelievo) {
         prelievoCell = cols[4] || "";
         ordinatoCell = hasFlag ? cols[5] || "" : "";
-        consegnaCell = hasFlag ? cols[6] || "" : cols[5] || "";
+        if (hasFlag && cols.length >= 8) {
+          effettivoCell = cols[6] || "";
+          consegnaCell = cols[7] || "";
+        } else {
+          consegnaCell = hasFlag ? cols[6] || "" : cols[5] || "";
+        }
       } else if (hasIngresso) {
         ordinatoCell = hasFlag ? cols[4] || "" : "";
-        consegnaCell = hasFlag ? cols[5] || "" : cols[4] || "";
+        if (hasFlag && cols.length >= 7) {
+          effettivoCell = cols[5] || "";
+          consegnaCell = cols[6] || "";
+        } else {
+          consegnaCell = hasFlag ? cols[5] || "" : cols[4] || "";
+        }
       } else {
         ordinatoCell = hasFlag ? cols[3] || "" : "";
-        consegnaCell = hasFlag
-          ? cols[4] || ""
-          : cols.length >= 4
-          ? cols[3] || ""
-          : cols[2] || "";
-        if (cols.length >= 6) {
+        if (hasFlag && cols.length >= 7) {
+          effettivoCell = cols[4] || "";
+          consegnaCell = cols[5] || "";
+          prelievoCell = cols[6] || "";
+        } else if (hasFlag && cols.length >= 6) {
+          effettivoCell = cols[4] || "";
+          consegnaCell = cols[5] || "";
+        } else {
+          consegnaCell = hasFlag
+            ? cols[4] || ""
+            : cols.length >= 4
+            ? cols[3] || ""
+            : cols[2] || "";
+        }
+        if (!hasFlag && cols.length >= 6) {
           prelievoCell = cols[5] || "";
         } else if (!hasFlag && cols.length >= 5) {
           prelievoCell = cols[4] || "";
@@ -3831,6 +5567,7 @@ function parseImportDateRows(text) {
     const ingressoParsed = parseDateCell(ingressoCell);
     const ordineParsed = parseDateCell(ordineCell);
     const stimatoParsed = parseDateCell(stimatoCell);
+    const effettivoParsed = parseDateCell(effettivoCell);
     const prelievoParsed = parseDateCell(prelievoCell);
     const ordinatoParsed = parseBooleanCell(ordinatoCell);
     const consegnaParsed = parseDateCell(consegnaCell);
@@ -3855,6 +5592,13 @@ function parseImportDateRows(text) {
     } else if (stimatoCell && stimatoParsed.reason === "range") {
       warnings.push(`Riga ${i + 1}: data ordine telaio stimato fuori range (2000-2100)`);
     }
+    if (effettivoCell && effettivoParsed.reason === "invalid") {
+      warnings.push(`Riga ${i + 1}: data ordine telaio effettivo non valida`);
+    } else if (effettivoCell && effettivoParsed.reason === "empty") {
+      warnings.push(`Riga ${i + 1}: data ordine telaio effettivo vuota/zero`);
+    } else if (effettivoCell && effettivoParsed.reason === "range") {
+      warnings.push(`Riga ${i + 1}: data ordine telaio effettivo fuori range (2000-2100)`);
+    }
     if (prelievoCell && prelievoParsed.reason === "invalid") {
       warnings.push(`Riga ${i + 1}: data prelievo materiali non valida`);
     } else if (prelievoCell && prelievoParsed.reason === "empty") {
@@ -3864,6 +5608,9 @@ function parseImportDateRows(text) {
     }
     if (ordinatoCell && ordinatoParsed.reason === "invalid") {
       warnings.push(`Riga ${i + 1}: valore ordinato non valido (usa VERO/FALSO)`);
+    }
+    if (ordinatoParsed.value === true && !effettivoParsed.date) {
+      errors.push(`Riga ${i + 1}: ordinato=VERO richiede ordine_telaio_effettivo valido`);
     }
     if (consegnaCell && consegnaParsed.reason === "invalid") {
       warnings.push(`Riga ${i + 1}: data consegna macchina non valida`);
@@ -3878,18 +5625,21 @@ function parseImportDateRows(text) {
       ingresso: ingressoParsed.date,
       ordine: ordineParsed.date,
       stimato: stimatoParsed.date,
+      effettivo: effettivoParsed.date,
       prelievo: prelievoParsed.date,
       ordinato: ordinatoParsed.value,
       consegna: consegnaParsed.date,
       ingressoReason: ingressoParsed.reason,
       ordineReason: ordineParsed.reason,
       stimatoReason: stimatoParsed.reason,
+      effettivoReason: effettivoParsed.reason,
       prelievoReason: prelievoParsed.reason,
       ordinatoReason: ordinatoParsed.reason,
       consegnaReason: consegnaParsed.reason,
       ingressoRaw: ingressoCell,
       ordineRaw: ordineCell,
       stimatoRaw: stimatoCell,
+      effettivoRaw: effettivoCell,
       prelievoRaw: prelievoCell,
       ordinatoRaw: ordinatoCell,
       consegnaRaw: consegnaCell,
@@ -4131,14 +5881,58 @@ function getMatrixWeeks() {
   return getMatrixDefaultWeeks(matrixState.view);
 }
 
-function weekDaysForMatrix(baseDate) {
-  const start = startOfWeek(baseDate);
+function clampMatrixWeeks(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return MATRIX_MIN_WEEKS;
+  return Math.min(MATRIX_MAX_WEEKS, Math.max(MATRIX_MIN_WEEKS, numeric));
+}
+
+function syncMatrixViewFromWeeks(weeks) {
+  const normalized = clampMatrixWeeks(weeks);
+  if (normalized <= 1) matrixState.view = "week";
+  else if (normalized <= 2) matrixState.view = "two";
+  else if (normalized <= 3) matrixState.view = "three";
+  else matrixState.view = "six";
+}
+
+function normalizeMatrixStartDate(date) {
+  const candidate = date ? new Date(date) : new Date();
+  const safeDate = Number.isNaN(candidate.getTime()) ? new Date() : candidate;
+  const day = startOfDay(safeDate);
+  return normalizeBusinessDay(day, 1);
+}
+
+function getMatrixVisibleBusinessDays() {
+  return Math.max(1, Math.round(getMatrixWeeks() * 5));
+}
+
+function getMatrixPanBufferBusinessDays(visibleBusinessDays = getMatrixVisibleBusinessDays()) {
+  if (!MATRIX_MOVEMENT_ENABLED) return 0;
+  const visible = Math.max(1, Math.round(Number(visibleBusinessDays) || 1));
+  // Buffer laterale ampio per evitare "muro" visivo durante il pan.
+  return Math.max(8, Math.min(35, Math.round(visible * 0.8)));
+}
+
+function getMatrixRenderWindow(baseDate) {
+  const renderStart = startOfWeek(baseDate);
   const weeks = getMatrixWeeks();
   const days = [];
   for (let i = 0; i < weeks; i += 1) {
-    days.push(...weekdayDates(addDays(start, i * 7)));
+    days.push(...weekdayDates(addDays(renderStart, i * 7)));
   }
-  return days;
+  const visibleBusinessDays = days.length;
+  return {
+    days,
+    renderStart,
+    visibleStart: renderStart,
+    visibleBusinessDays,
+    bufferBusinessDays: 0,
+    totalBusinessDays: visibleBusinessDays,
+  };
+}
+
+function weekDaysForMatrix(baseDate) {
+  return getMatrixRenderWindow(baseDate).days;
 }
 
 function endOfDay(date) {
@@ -4378,12 +6172,14 @@ function renderMilestonePicker() {
       const field = milestonePickerState.field;
       if (!commessaId || !field) return;
       milestonePickerState.saving = true;
-      const payload = {};
+      let payload = {};
       if (field === "ordine") payload.data_ordine_telaio = formatDateInput(date);
       if (field === "prelievo") payload.data_prelievo = formatDateInput(date);
       if (field === "kit_cavi") payload.data_arrivo_kit_cavi = formatDateInput(date);
       if (field === "consegna") payload.data_consegna_macchina = formatDateInput(date);
-      if (field === "ordine_pianificato") payload.data_consegna_telaio_effettiva = formatDateInput(date);
+      if (field === "ordine_pianificato") payload.data_conferma_consegna_telaio = formatDateInput(date);
+      const consistency = ensureTelaioOrderPayloadConsistency(commessaId, payload, { notify: false });
+      payload = consistency.payload;
       const role = String(state.profile?.ruolo || "").trim().toLowerCase();
       let error = null;
       if (
@@ -4411,9 +6207,9 @@ function renderMilestonePicker() {
       if (
         field === "ordine_pianificato" &&
         state.selected?.id === commessaId &&
-        d.data_consegna_telaio_effettiva
+        d.data_conferma_consegna_telaio
       ) {
-        d.data_consegna_telaio_effettiva.value = payload.data_consegna_telaio_effettiva || "";
+        d.data_conferma_consegna_telaio.value = payload.data_conferma_consegna_telaio || "";
       }
       applyFilters();
       renderMatrixReport();
@@ -4438,29 +6234,55 @@ function renderMilestonePicker() {
           showToast("You don't have permission to edit this commessa.", "error");
           return;
         }
+        if (!canEditTelaioOrderByRole()) {
+          const msg = "Solo admin e responsabile possono modificare lo stato ordine telaio.";
+          setStatus(msg, "error");
+          showToast(msg, "error");
+          return;
+        }
         const commessaId = milestonePickerState.commessaId;
         if (!commessaId) return;
-        if (!isOrdered) {
-          const hasPlanned =
-            Boolean(milestonePickerState.selected) ||
-            Boolean(commessa?.data_consegna_telaio_effettiva);
-          if (!hasPlanned) {
-            const msg = "Add a planned frame order date before marking as ordered.";
-            setStatus(msg, "error");
-            showToast(msg, "error");
-            return;
-          }
-        }
         const nextState = !isOrdered;
+        if (!nextState) {
+          const confirmed = await openConfirmModal(
+            "Il telaio risulta ORDINATO. Passare a NON ORDINATO e azzerare la data ordine?",
+            null,
+            {
+              okLabel: "Conferma",
+              cancelLabel: "Annulla",
+            }
+          );
+          if (!confirmed) return;
+        }
+        let payload = { telaio_consegnato: nextState };
+        if (nextState && milestonePickerState.selected) {
+          payload.data_consegna_telaio_effettiva = formatDateInput(milestonePickerState.selected);
+        }
+        if (!nextState) {
+          payload.data_consegna_telaio_effettiva = null;
+        }
+        const consistency = ensureTelaioOrderPayloadConsistency(commessaId, payload, {
+          focusDateField: true,
+          toast: true,
+        });
+        if (!consistency.ok) return;
+        payload = consistency.payload;
         const { error } = await supabase
           .from("commesse")
-          .update({ telaio_consegnato: nextState })
+          .update(payload)
           .eq("id", commessaId);
         if (error) {
           setStatus(`Update error: ${error.message}`, "error");
           return;
         }
-        updateCommessaInState(commessaId, { telaio_consegnato: nextState });
+        updateCommessaInState(commessaId, payload);
+        if (
+          state.selected?.id === commessaId &&
+          d.data_consegna_telaio_effettiva &&
+          Object.prototype.hasOwnProperty.call(payload, "data_consegna_telaio_effettiva")
+        ) {
+          d.data_consegna_telaio_effettiva.value = payload.data_consegna_telaio_effettiva || "";
+        }
         if (state.selected?.id === commessaId && d.telaio_ordinato) {
           setTelaioOrdinatoButton(
             d.telaio_ordinato,
@@ -4632,12 +6454,14 @@ async function handleMilestoneDragEnd(e) {
     if (drag.line) drag.line.style.left = `${info.leftPct}%`;
   }
   if (!newDate) return;
-  const payload = {};
+  let payload = {};
   if (drag.field === "ordine") payload.data_ordine_telaio = formatDateInput(newDate);
   if (drag.field === "kit_cavi") payload.data_arrivo_kit_cavi = formatDateInput(newDate);
   if (drag.field === "prelievo") payload.data_prelievo = formatDateInput(newDate);
   if (drag.field === "consegna") payload.data_consegna_macchina = formatDateInput(newDate);
-  if (drag.field === "ordine_pianificato") payload.data_consegna_telaio_effettiva = formatDateInput(newDate);
+  if (drag.field === "ordine_pianificato") payload.data_conferma_consegna_telaio = formatDateInput(newDate);
+  const consistency = ensureTelaioOrderPayloadConsistency(drag.commessaId, payload, { notify: false });
+  payload = consistency.payload;
   const role = String(state.profile?.ruolo || "").trim().toLowerCase();
   if (
     role === "planner" &&
@@ -4670,9 +6494,9 @@ async function handleMilestoneDragEnd(e) {
   if (
     drag.field === "ordine_pianificato" &&
     state.selected?.id === drag.commessaId &&
-    d.data_consegna_telaio_effettiva
+    d.data_conferma_consegna_telaio
   ) {
-    d.data_consegna_telaio_effettiva.value = payload.data_consegna_telaio_effettiva || "";
+    d.data_conferma_consegna_telaio.value = payload.data_conferma_consegna_telaio || "";
   }
   applyFilters();
   renderMatrixReport();
@@ -4955,6 +6779,18 @@ function overlapsDay(attivita, day) {
 
 function isAssenteTitle(title) {
   return (title || "").trim().toLowerCase() === "assente";
+}
+
+function getActivityDisplayLabel(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return raw;
+  if (!isLavenderActivity(raw) && !isAssenteTitle(raw)) return raw;
+  return raw
+    .toLocaleLowerCase("it-IT")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toLocaleUpperCase("it-IT") + part.slice(1))
+    .join(" ");
 }
 
 function businessDaysBetweenInclusive(start, end) {
@@ -5263,6 +7099,250 @@ function hasGapBefore(list, targetStart) {
   return lastEnd.getTime() < expectedPrevEnd.getTime();
 }
 
+async function clearTodoNotNeededOverrideSilently(commessaId, titolo) {
+  if (!commessaId || !titolo) return true;
+  const { error } = await supabase
+    .from("commessa_attivita_override")
+    .delete()
+    .eq("commessa_id", commessaId)
+    .eq("titolo", titolo);
+  if (error) return false;
+  const key = String(commessaId);
+  const list = state.todoOverridesMap.get(key) || new Map();
+  list.delete(normalizePhaseKey(titolo));
+  state.todoOverridesMap.set(key, list);
+  return true;
+}
+
+async function syncTelaioPlannedDateFromMatrix(commessaId, endDate) {
+  if (!commessaId || !endDate) return true;
+  const day = startOfDay(endDate);
+  if (Number.isNaN(day.getTime())) return false;
+  const nextIso = formatDateInput(day);
+  const current = findCommessaInState(commessaId);
+  const currentIso = formatIsoDateOnly(current?.data_conferma_consegna_telaio || null);
+  if (currentIso === nextIso) return true;
+
+  const { error } = await supabase
+    .from("commesse")
+    .update({ data_conferma_consegna_telaio: nextIso })
+    .eq("id", commessaId);
+  if (error) return false;
+
+  updateCommessaInState(commessaId, { data_conferma_consegna_telaio: nextIso });
+  if (state.selected?.id === commessaId && d.data_conferma_consegna_telaio) {
+    d.data_conferma_consegna_telaio.value = nextIso;
+  }
+  return true;
+}
+
+function animateMatrixMoveGhost(sourceBar, targetCell, durationDays = 1, options = {}) {
+  return new Promise((resolve) => {
+    if (!targetCell) return resolve();
+    const followerGhost =
+      options.useExistingFollower !== false && matrixState.dragFollowerEl && matrixState.dragFollowerEl.isConnected
+        ? matrixState.dragFollowerEl
+        : null;
+    const sourceEl = followerGhost || sourceBar;
+    if (!sourceEl) return resolve();
+    const sourceRect = sourceEl.getBoundingClientRect();
+    if (!sourceRect.width || !sourceRect.height) return resolve();
+
+    const targetRow = targetCell.closest(".matrix-row");
+    if (!targetRow) return resolve();
+    const dayCells = Array.from(targetRow.querySelectorAll(".matrix-cell[data-day]"));
+    const startIdx = dayCells.indexOf(targetCell);
+    if (startIdx < 0) return resolve();
+    const spanDays = Math.max(1, Number(durationDays) || 1);
+    const endIdx = Math.min(dayCells.length - 1, startIdx + spanDays - 1);
+    const startCell = dayCells[startIdx];
+    const endCell = dayCells[endIdx] || startCell;
+    if (!startCell || !endCell) return resolve();
+
+    const startCellRect = startCell.getBoundingClientRect();
+    const endCellRect = endCell.getBoundingClientRect();
+    const targetLayer = targetRow.querySelector(".matrix-bar-layer");
+    const targetLayerRect = targetLayer ? targetLayer.getBoundingClientRect() : null;
+    const targetLeft = startCellRect.left;
+    const targetWidth = Math.max(8, endCellRect.right - startCellRect.left);
+    const targetTopBase = targetLayerRect ? targetLayerRect.top : startCellRect.top;
+    const targetTop = targetTopBase + 6;
+
+    const dx = Math.abs(targetLeft - sourceRect.left);
+    const dy = Math.abs(targetTop - sourceRect.top);
+    const dw = Math.abs(targetWidth - sourceRect.width);
+    if (dx < 0.5 && dy < 0.5 && dw < 0.5) return resolve();
+
+    let ghost = followerGhost;
+    if (!ghost) {
+      const dropClientX = Number(options.dropClientX);
+      const dropClientY = Number(options.dropClientY);
+      const pointerOffsetX = Number(options.pointerOffsetX);
+      const pointerOffsetY = Number(options.pointerOffsetY);
+      const hasDropPoint = Number.isFinite(dropClientX) && Number.isFinite(dropClientY);
+      const hasOffsets = Number.isFinite(pointerOffsetX) && Number.isFinite(pointerOffsetY);
+      const startLeft = hasDropPoint
+        ? dropClientX - (hasOffsets ? pointerOffsetX : sourceRect.width / 2)
+        : sourceRect.left;
+      const startTop = hasDropPoint
+        ? dropClientY - (hasOffsets ? pointerOffsetY : sourceRect.height / 2)
+        : sourceRect.top;
+      ghost = sourceBar.cloneNode(true);
+      ghost.classList.remove("dragging", "resizing");
+      ghost.style.position = "fixed";
+      ghost.style.left = `${startLeft}px`;
+      ghost.style.top = `${startTop}px`;
+      ghost.style.width = `${sourceRect.width}px`;
+      ghost.style.height = `${sourceRect.height}px`;
+      ghost.style.marginTop = "0";
+      ghost.style.zIndex = "2400";
+      ghost.style.pointerEvents = "none";
+      document.body.appendChild(ghost);
+    } else {
+      ghost.style.left = `${sourceRect.left}px`;
+      ghost.style.top = `${sourceRect.top}px`;
+      ghost.style.width = `${sourceRect.width}px`;
+      ghost.style.height = `${sourceRect.height}px`;
+    }
+    ghost.style.transition =
+      "left 170ms cubic-bezier(0.22, 1, 0.36, 1), top 170ms cubic-bezier(0.22, 1, 0.36, 1), width 170ms cubic-bezier(0.22, 1, 0.36, 1), opacity 120ms ease";
+    ghost.style.willChange = "left, top, width";
+
+    const holdAtTarget = options.holdAtTarget === true;
+
+    let settled = false;
+    let removed = false;
+    const removeGhost = () => {
+      if (removed) return;
+      removed = true;
+      ghost.removeEventListener("transitionend", done);
+      if (matrixState.dragFollowerEl === ghost) {
+        removeMatrixDragFollower();
+      } else {
+        ghost.remove();
+      }
+    };
+    const releaseGhost = ({ immediate = false, anchorEl = null, onAfterRemove = null } = {}) => {
+      const runAfterRemove = () => {
+        if (typeof onAfterRemove === "function") {
+          try {
+            onAfterRemove();
+          } catch (_err) {
+            // Ignore callback errors to keep drag flow stable.
+          }
+        }
+      };
+      if (removed) return;
+      if (immediate) {
+        removeGhost();
+        runAfterRemove();
+        return;
+      }
+      const anchorRect = anchorEl?.getBoundingClientRect?.();
+      const hasAnchorRect =
+        anchorRect &&
+        Number.isFinite(anchorRect.left) &&
+        Number.isFinite(anchorRect.top) &&
+        Number.isFinite(anchorRect.width) &&
+        Number.isFinite(anchorRect.height) &&
+        anchorRect.width > 0 &&
+        anchorRect.height > 0;
+      if (hasAnchorRect) {
+        ghost.style.transition =
+          "left 110ms cubic-bezier(0.22, 1, 0.36, 1), top 110ms cubic-bezier(0.22, 1, 0.36, 1), width 110ms cubic-bezier(0.22, 1, 0.36, 1), height 110ms cubic-bezier(0.22, 1, 0.36, 1), opacity 120ms ease";
+        ghost.style.left = `${anchorRect.left}px`;
+        ghost.style.top = `${anchorRect.top}px`;
+        ghost.style.width = `${anchorRect.width}px`;
+        ghost.style.height = `${anchorRect.height}px`;
+        window.setTimeout(() => {
+          if (removed) return;
+          ghost.style.transition = "opacity 120ms ease";
+          ghost.style.opacity = "0";
+          window.setTimeout(() => {
+            removeGhost();
+            runAfterRemove();
+          }, 150);
+        }, 115);
+        return;
+      }
+      ghost.style.transition = "opacity 120ms ease";
+      ghost.style.opacity = "0";
+      window.setTimeout(() => {
+        removeGhost();
+        runAfterRemove();
+      }, 150);
+    };
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      if (holdAtTarget) {
+        resolve(releaseGhost);
+        return;
+      }
+      removeGhost();
+      resolve(null);
+    };
+    ghost.addEventListener("transitionend", done);
+    window.setTimeout(done, 240);
+
+    requestAnimationFrame(() => {
+      ghost.style.left = `${targetLeft}px`;
+      ghost.style.top = `${targetTop}px`;
+      ghost.style.width = `${targetWidth}px`;
+    });
+  });
+}
+
+async function getExistingTelaioAssignments(commessaId) {
+  if (!commessaId) return [];
+  const commessaKey = String(commessaId);
+  const risorsaById = new Map((state.risorse || []).map((r) => [String(r.id), r.nome || `Risorsa ${r.id}`]));
+  let rows = [];
+  try {
+    const { data, error } = await supabase
+      .from("attivita")
+      .select("id,commessa_id,titolo,risorsa_id,data_inizio,stato")
+      .eq("commessa_id", commessaId);
+    if (!error && Array.isArray(data)) rows = data;
+  } catch {
+    // fallback locale
+  }
+  if (!rows.length) {
+    rows = (matrixState.attivita || []).filter((row) => String(row?.commessa_id || "") === commessaKey);
+  }
+  return rows
+    .filter((row) => isTelaioActivityTitle(row?.titolo || ""))
+    .filter((row) => normalizePhaseKey(row?.stato || "") !== "annullata")
+    .map((row) => ({
+      id: row?.id || null,
+      risorsaLabel: risorsaById.get(String(row?.risorsa_id || "")) || `Risorsa ${row?.risorsa_id || "n/d"}`,
+      start: row?.data_inizio ? startOfDay(new Date(row.data_inizio)) : null,
+    }))
+    .sort((a, b) => {
+      const at = a.start?.getTime?.() || Number.POSITIVE_INFINITY;
+      const bt = b.start?.getTime?.() || Number.POSITIVE_INFINITY;
+      return at - bt;
+    });
+}
+
+async function confirmTelaioDuplicateAssignment(commessaId) {
+  const existing = await getExistingTelaioAssignments(commessaId);
+  if (!existing.length) return true;
+  const first = existing[0];
+  const dayLabel = first.start ? formatDateDMY(first.start) : "data n/d";
+  const extra = existing.length > 1 ? ` (+${existing.length - 1} altre assegnazioni)` : "";
+  const confirmed = await openConfirmModal(
+    `Attenzione: Telaio gia assegnato a ${first.risorsaLabel} il giorno ${dayLabel}${extra}. Vuoi assegnarlo comunque?`,
+    null,
+    { okLabel: "Assegna comunque", cancelLabel: "Annulla" }
+  );
+  if (!confirmed) {
+    setStatus("Assegnazione annullata.", "info");
+    return false;
+  }
+  return true;
+}
+
 async function handleMatrixDropOnCell(cell, e) {
   if (!cell || !cell.dataset) return;
   const risorsaId = cell.dataset.risorsa;
@@ -5400,27 +7480,29 @@ async function handleMatrixDropOnCell(cell, e) {
   const newEnd = new Date(newEndDay);
   newEnd.setHours(end.getHours(), end.getMinutes(), end.getSeconds(), end.getMilliseconds());
   const deltaDays = businessDayDiff(start, newStart);
+  const shouldForcePlannedTelaio = isTelaioActivityTitle(item.titolo) && Boolean(item.commessa_id);
+  let pendingMoveGhostRelease = null;
 
-        const copy = e.altKey || e.ctrlKey || e.metaKey;
-        if (copy) {
-          if (!isActivityAllowedForRisorsa(item.titolo, r.id)) {
-            setStatus("This activity is not available for this department.", "error");
-            return;
-          }
-          if (matrixState.autoShift) {
-            const hasOverlap = matrixState.attivita.some((a) => a.risorsa_id === r.id && overlapsDay(a, targetDate));
-            if (hasOverlap) {
-              const ok = await shiftRisorsa(r.id, targetDate, durationDays);
-              if (!ok) return;
-            }
-          }
+  const copy = e.altKey || e.ctrlKey || e.metaKey;
+  if (copy) {
+    if (!isActivityAllowedForRisorsa(item.titolo, r.id)) {
+      setStatus("This activity is not available for this department.", "error");
+      return;
+    }
+    if (matrixState.autoShift) {
+      const hasOverlap = matrixState.attivita.some((a) => a.risorsa_id === r.id && overlapsDay(a, targetDate));
+      if (hasOverlap) {
+        const ok = await shiftRisorsa(r.id, targetDate, durationDays);
+        if (!ok) return;
+      }
+    }
     const { error } = await supabase.from("attivita").insert({
       commessa_id: item.commessa_id,
       titolo: item.titolo,
       descrizione: item.descrizione,
       risorsa_id: r.id,
       reparto_id: item.reparto_id,
-      stato: item.stato,
+      stato: shouldForcePlannedTelaio ? "pianificata" : item.stato || "pianificata",
       data_inizio: newStart.toISOString(),
       data_fine: newEnd.toISOString(),
     });
@@ -5428,23 +7510,35 @@ async function handleMatrixDropOnCell(cell, e) {
       setStatus(`Copy error: ${error.message}`, "error");
       return;
     }
-    setStatus("Activity copied.", "ok");
-        } else {
-          if (!isActivityAllowedForRisorsa(item.titolo, r.id)) {
-            setStatus("This activity is not available for this department.", "error");
-            return;
-          }
-          let dependentActivities = null;
-          let dependentToShift = null;
-          if (matrixState.autoShift && isPhaseKey(item.titolo) && deltaDays !== 0) {
-            dependentActivities = await getDependentActivitiesForKey(item);
-            if (dependentActivities == null) return;
-            dependentToShift = getDependentActivitiesToShift(item, deltaDays, dependentActivities);
-          }
-          const excludeIds =
-            dependentToShift && dependentToShift.length
-              ? [item.id, ...dependentToShift.map((a) => a.id)]
-              : [item.id];
+    const overrideCleared = shouldForcePlannedTelaio
+      ? await clearTodoNotNeededOverrideSilently(item.commessa_id, item.titolo)
+      : true;
+    const telaioPlannedSynced = shouldForcePlannedTelaio
+      ? await syncTelaioPlannedDateFromMatrix(item.commessa_id, newEnd)
+      : true;
+    if (!overrideCleared) {
+      setStatus("Activity copied, ma override ToDos non aggiornato.", "error");
+    } else if (!telaioPlannedSynced) {
+      setStatus("Activity copied, ma data telaio pianificata non aggiornata.", "error");
+    } else {
+      setStatus("Activity copied.", "ok");
+    }
+  } else {
+    if (!isActivityAllowedForRisorsa(item.titolo, r.id)) {
+      setStatus("This activity is not available for this department.", "error");
+      return;
+    }
+    let dependentActivities = null;
+    let dependentToShift = null;
+    if (matrixState.autoShift && isPhaseKey(item.titolo) && deltaDays !== 0) {
+      dependentActivities = await getDependentActivitiesForKey(item);
+      if (dependentActivities == null) return;
+      dependentToShift = getDependentActivitiesToShift(item, deltaDays, dependentActivities);
+    }
+    const excludeIds =
+      dependentToShift && dependentToShift.length
+        ? [item.id, ...dependentToShift.map((a) => a.id)]
+        : [item.id];
     if (matrixState.autoShift && deltaDays < 0) {
       const cutDate = addDays(startOfDay(end), 1);
       const ok = await shiftRisorsa(r.id, cutDate, deltaDays, excludeIds);
@@ -5463,26 +7557,81 @@ async function handleMatrixDropOnCell(cell, e) {
       setStatus("Non autorizzato a spostare attivita.", "error");
       return;
     }
-    const { error } = await supabase
-      .from("attivita")
-      .update({
+
+    let moveCompleted = false;
+    try {
+      let sourceBarEl = null;
+      if (matrixGrid && item?.id != null) {
+        sourceBarEl = Array.from(matrixGrid.querySelectorAll(".matrix-activity-bar[data-activity-id]")).find(
+          (el) => String(el.dataset.activityId || "") === String(item.id)
+        );
+      }
+
+      pendingMoveGhostRelease = await animateMatrixMoveGhost(sourceBarEl, cell, durationDays, {
+        dropClientX: e?.clientX,
+        dropClientY: e?.clientY,
+        pointerOffsetX: matrixState.dragPointerOffsetX,
+        pointerOffsetY: matrixState.dragPointerOffsetY,
+        useExistingFollower: true,
+        holdAtTarget: true,
+      });
+
+      const movePayload = {
         risorsa_id: r.id,
         data_inizio: newStart.toISOString(),
         data_fine: newEnd.toISOString(),
-      })
-      .eq("id", item.id);
-    if (error) {
-      setStatus(`Move error: ${error.message}`, "error");
-      return;
+      };
+      if (shouldForcePlannedTelaio) {
+        movePayload.stato = "pianificata";
+      }
+      const { error } = await supabase.from("attivita").update(movePayload).eq("id", item.id);
+      if (error) {
+        setStatus(`Move error: ${error.message}`, "error");
+        return;
+      }
+      if (isPhaseKey(item.titolo) && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
+        const ok = await shiftDependentPhases(item, deltaDays, dependentToShift);
+        if (!ok) return;
+      }
+
+      let telaioPlannedSynced = true;
+      if (isTelaioActivityTitle(item.titolo) && item.commessa_id) {
+        telaioPlannedSynced = await syncTelaioPlannedDateFromMatrix(item.commessa_id, newEnd);
+        const commessa = findCommessaInState(item.commessa_id);
+        await warnTelaioPlannedMismatch(item.commessa_id, commessa?.data_conferma_consegna_telaio || null, {
+          telaioEndDay: startOfDay(newEnd),
+        });
+      }
+      const overrideCleared = shouldForcePlannedTelaio
+        ? await clearTodoNotNeededOverrideSilently(item.commessa_id, item.titolo)
+        : true;
+      if (!overrideCleared) {
+        setStatus("Activity moved, ma override ToDos non aggiornato.", "error");
+      } else if (!telaioPlannedSynced) {
+        setStatus("Activity moved, ma data telaio pianificata non aggiornata.", "error");
+      } else {
+        setStatus("Activity moved.", "ok");
+      }
+      moveCompleted = true;
+    } finally {
+      if (!moveCompleted && pendingMoveGhostRelease) {
+        pendingMoveGhostRelease({ immediate: true });
+        pendingMoveGhostRelease = null;
+      }
     }
-          if (isPhaseKey(item.titolo) && deltaDays !== 0 && dependentToShift && dependentToShift.length) {
-            const ok = await shiftDependentPhases(item, deltaDays, dependentToShift);
-            if (!ok) return;
-          }
-    setStatus("Activity moved.", "ok");
   }
   await loadMatrixAttivita();
-  await refreshTodoRealtimeSnapshot();
+  if (pendingMoveGhostRelease) {
+    let finalBarEl = null;
+    if (matrixGrid && item?.id != null) {
+      finalBarEl = Array.from(matrixGrid.querySelectorAll(".matrix-activity-bar[data-activity-id]")).find(
+        (el) => String(el.dataset.activityId || "") === String(item.id)
+      );
+    }
+    pendingMoveGhostRelease({ anchorEl: finalBarEl || null });
+    pendingMoveGhostRelease = null;
+  }
+  await refreshTodoRealtimeSnapshot([item.commessa_id]);
 }
 
 function getCommessaLabel(commessaId) {
@@ -5655,6 +7804,51 @@ function renderCommesse(list) {
     });
     commesseList.appendChild(item);
   });
+}
+
+function formatMissingSequence(values, limit = 12) {
+  if (!Array.isArray(values) || !values.length) return "";
+  const head = values.slice(0, limit);
+  const text = head.join(", ");
+  if (values.length <= limit) return text;
+  return `${text} +${values.length - limit}`;
+}
+
+function updateCommesseSequenceAlert() {
+  if (!commesseSeqAlert) return;
+  const currentYear = new Date().getFullYear();
+  const numbers = (state.commesse || [])
+    .filter((c) => Number(c.anno) === currentYear)
+    .map((c) => Number(c.numero))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  const sequenceNumbers = numbers.filter((n) => n !== 999);
+
+  commesseSeqAlert.classList.remove("hidden", "error");
+
+  if (!sequenceNumbers.length) {
+    commesseSeqAlert.textContent = `Anno ${currentYear}: nessuna commessa.`;
+    return;
+  }
+
+  const uniqueSorted = Array.from(new Set(sequenceNumbers)).sort((a, b) => a - b);
+  const hasBelowTen = uniqueSorted.some((n) => n < 10);
+  const highest = uniqueSorted[uniqueSorted.length - 1];
+  const present = new Set(uniqueSorted.filter((n) => n >= 10));
+  const missing = [];
+  for (let n = 10; n <= highest; n += 1) {
+    if (!present.has(n)) missing.push(n);
+  }
+
+  if (hasBelowTen || missing.length) {
+    const issues = [];
+    if (hasBelowTen) issues.push("presenti numeri < 10");
+    if (missing.length) issues.push(`buchi: ${formatMissingSequence(missing)}`);
+    commesseSeqAlert.textContent = `Anno ${currentYear}: numerazione non continua (${issues.join("; ")}).`;
+    commesseSeqAlert.classList.add("error");
+    return;
+  }
+
+  commesseSeqAlert.textContent = `Anno ${currentYear}: numerazione continua da 10 a ${highest}.`;
 }
 
 function renderReparti(commessa) {
@@ -5890,6 +8084,8 @@ function applyFilters() {
   });
   state.filteredCommesse = filtered;
   renderCommesse(filtered);
+  updateCommesseSequenceAlert();
+  renderTelaioOrderAlarms();
   loadCommesseRisorseFor(filtered);
 }
 
@@ -6025,7 +8221,15 @@ function renderTodoPriorityButtonLabel() {
   if (!todoPriorityBtn) return;
   const mode = todoPriorityBtn.dataset.mode || "off";
   todoPriorityBtn.classList.toggle("active", mode !== "off");
-  todoPriorityBtn.textContent = mode === "asc" ? "Priorità: crescente" : "Priorità: OFF";
+  if (mode === "asc") {
+    todoPriorityBtn.textContent = "Priorità: crescente";
+    return;
+  }
+  if (mode === "desc") {
+    todoPriorityBtn.textContent = "Priorità: decrescente";
+    return;
+  }
+  todoPriorityBtn.textContent = "Priorità: OFF";
 }
 
 function getTodoPriorityDate(commessa, field) {
@@ -6037,13 +8241,101 @@ function getTodoPriorityDate(commessa, field) {
     return d.getTime();
   };
   if (field === "telaio_target") return parse(commessa.data_ordine_telaio);
-  if (field === "telaio_stimato") return parse(commessa.data_consegna_telaio_effettiva);
+  if (field === "telaio_stimato") return parse(commessa.data_conferma_consegna_telaio);
   if (field === "prelievo") return parse(commessa.data_prelievo);
   if (field === "kit_cavi") return parse(commessa.data_arrivo_kit_cavi);
   if (field === "consegna") {
     return parse(commessa.data_consegna_macchina || commessa.data_consegna_prevista || commessa.data_consegna);
   }
   return null;
+}
+
+function getTodoPriorityFieldLabel(field) {
+  if (field === "telaio_target") return "Telaio target";
+  if (field === "telaio_stimato") return "Telaio pianificato";
+  if (field === "prelievo") return "Prelievo";
+  if (field === "kit_cavi") return "Kit cavi";
+  if (field === "consegna") return "Consegna";
+  return "Priorita";
+}
+
+function getTodoPriorityDisplay(commessa, field) {
+  const value = getTodoPriorityDate(commessa, field);
+  if (value == null) return "n/d";
+  return formatDateDMY(new Date(value));
+}
+
+function updateTodoSyncMatrixFiltersButton() {
+  if (!todoSyncMatrixFiltersBtn) return;
+  const count = todoSyncedCommessaIds.size;
+  todoSyncMatrixFiltersBtn.classList.toggle("active", count > 0);
+  if (count > 0) {
+    todoSyncMatrixFiltersBtn.dataset.count = String(count);
+  } else {
+    delete todoSyncMatrixFiltersBtn.dataset.count;
+  }
+  if (count === 0) {
+    todoSyncMatrixFiltersBtn.title = "Quick fill: copia i filtri commessa attivi dalla Matrice risorse";
+    return;
+  }
+  if (count === 1) {
+    const only = Array.from(todoSyncedCommessaIds)[0];
+    const commessa = (state.commesse || []).find((c) => String(c.id) === String(only));
+    const code = commessa?.codice || "1 commessa";
+    todoSyncMatrixFiltersBtn.title = `Quick fill attivo: ${code}`;
+    return;
+  }
+  todoSyncMatrixFiltersBtn.title = `Quick fill attivo: ${count} commesse sincronizzate dalla Matrice risorse`;
+}
+
+function setTodoSyncedCommessaIds(ids = []) {
+  const normalized = Array.from(
+    new Set(
+      (ids || [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean)
+    )
+  );
+  todoSyncedCommessaIds = new Set(normalized);
+  updateTodoSyncMatrixFiltersButton();
+}
+
+function handleTodoQuickSyncFromMatrixFilters() {
+  const matrixCommesse = Array.from(matrixState.selectedCommesse || [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+  const normalizedMatrix = Array.from(new Set(matrixCommesse));
+  const current = Array.from(todoSyncedCommessaIds);
+  const sameSelection =
+    normalizedMatrix.length === current.length &&
+    normalizedMatrix.every((id) => todoSyncedCommessaIds.has(id));
+  if (sameSelection && normalizedMatrix.length > 0) {
+    setTodoSyncedCommessaIds([]);
+    renderMatrixReportFromTodoFilters();
+    setStatus("Quick fill To Dos disattivato.", "ok");
+    return;
+  }
+  if (!matrixCommesse.length) {
+    if (todoSyncedCommessaIds.size > 0) {
+      setTodoSyncedCommessaIds([]);
+      renderMatrixReportFromTodoFilters();
+      setStatus("Quick fill To Dos disattivato: nessun filtro commessa in Matrice.", "ok");
+      return;
+    }
+    if ((matrixState.selectedAttivita || new Set()).size > 0) {
+      setStatus("In Matrice hai solo filtro attivita: quick fill To Dos copia i filtri commessa.", "error");
+      return;
+    }
+    setStatus("Nessun filtro commessa attivo in Matrice risorse.", "error");
+    return;
+  }
+  setTodoSyncedCommessaIds(normalizedMatrix);
+  renderMatrixReportFromTodoFilters();
+  if (normalizedMatrix.length === 1) {
+    setStatus("Quick fill To Dos: filtro commessa sincronizzato dalla Matrice.", "ok");
+  } else {
+    setStatus(`Quick fill To Dos: sincronizzate ${normalizedMatrix.length} commesse dalla Matrice.`, "ok");
+  }
 }
 
 function applyTodoFilters(list, columns) {
@@ -6054,7 +8346,7 @@ function applyTodoFilters(list, columns) {
   };
   const isReleasedOrClosed = (commessa) => {
     const global = getTodoGlobalCommessaStatus(commessa).label;
-    return global === "Rilasciata a prod." || global === "Evasa";
+    return global === "Sospesa" || global === "Evasa" || global === "Rilasciata a produzione";
   };
   let commesse = list.slice();
   if (year) {
@@ -6065,21 +8357,25 @@ function applyTodoFilters(list, columns) {
   }
   if (desc) {
     commesse = commesse.filter((c) => {
-      const text = `${c.titolo || ""}`.toLowerCase();
+      const text = `${c.titolo || ""} ${c.tipo_macchina || ""}`.toLowerCase();
       return text.includes(desc);
     });
+  }
+  if (todoSyncedCommessaIds.size > 0) {
+    commesse = commesse.filter((c) => todoSyncedCommessaIds.has(String(c.id || "")));
   }
   if (!showComplete) {
     commesse = commesse.filter((c) => !isComplete(c) && !isReleasedOrClosed(c));
   }
-  if (priorityMode === "asc" && priorityField) {
+  if ((priorityMode === "asc" || priorityMode === "desc") && priorityField) {
+    const dir = priorityMode === "asc" ? 1 : -1;
     commesse.sort((a, b) => {
       const aa = getTodoPriorityDate(a, priorityField);
       const bb = getTodoPriorityDate(b, priorityField);
       if (aa == null && bb == null) return compareCommesseDesc(a, b);
       if (aa == null) return 1;
       if (bb == null) return -1;
-      if (aa !== bb) return aa - bb;
+      if (aa !== bb) return (aa - bb) * dir;
       return compareCommesseDesc(a, b);
     });
   }
@@ -6187,10 +8483,17 @@ function selectCommessa(id, options = {}) {
   if (d.numero) d.numero.value = commessa.numero != null ? String(commessa.numero) : "";
   d.titolo.value = commessa.titolo || "";
   d.cliente.value = commessa.cliente || "";
+  refreshMachineTypeSelects({
+    detailType: normalizeMachineTypeValue(commessa.tipo_macchina || "Altro tipo"),
+    detailVariant: normalizeMachineVariantValue(commessa.variante_macchina || "standard"),
+  });
   d.stato.value = commessa.stato || "nuova";
   d.priorita.value = commessa.priorita || "";
   d.data_ingresso.value = formatDate(commessa.data_ingresso);
   if (d.data_ordine_telaio) d.data_ordine_telaio.value = formatDate(commessa.data_ordine_telaio);
+  if (d.data_conferma_consegna_telaio) {
+    d.data_conferma_consegna_telaio.value = formatDate(commessa.data_conferma_consegna_telaio);
+  }
   if (d.telaio_ordinato) {
     setTelaioOrdinatoButton(
       d.telaio_ordinato,
@@ -6202,6 +8505,7 @@ function selectCommessa(id, options = {}) {
   if (d.data_consegna_telaio_effettiva) {
     d.data_consegna_telaio_effettiva.value = formatDate(commessa.data_consegna_telaio_effettiva);
   }
+  refreshDetailTelaioOrderAccess();
   if (d.data_arrivo_kit_cavi) {
     d.data_arrivo_kit_cavi.value = formatDate(commessa.data_arrivo_kit_cavi);
   }
@@ -6214,6 +8518,7 @@ function selectCommessa(id, options = {}) {
   renderReparti(commessa);
   renderCommesse(state.commesse);
   updateNumeroWarning(d.anno, d.numero, detailNumeroWarning, commessa.id);
+  updateDetailFieldCompletionUI();
   setDetailSnapshot();
   if (options.openModal) openCommessaDetailModal();
 }
@@ -6380,8 +8685,16 @@ async function loadRisorse() {
   }
   state.risorse = data || [];
   matrixState.risorse = (data || []).filter((r) => r.attiva);
-  renderMatrix();
-  renderMatrixReport();
+  if (matrixBootstrapSyncInProgress) {
+    renderResourcesPanel();
+    return;
+  }
+  const canRenderMatrixNow =
+    !authSyncInProgress ||
+    (Array.isArray(matrixState.attivita) && matrixState.attivita.length > 0);
+  if (canRenderMatrixNow) {
+    scheduleMatrixRenderStabilized();
+  }
   renderResourcesPanel();
 }
 
@@ -6471,6 +8784,9 @@ async function loadCommesse() {
     return;
   }
   state.commesse = data || [];
+  setMatrixQuickCommessaFilterRaw(matrixState.quickCommessaFilterRaw, { render: false });
+  refreshMachineTypeSelects();
+  updateCommesseSequenceAlert();
   renderYearFilter();
   renderReportYearFilter();
   renderTodoYearFilter();
@@ -6486,11 +8802,11 @@ async function loadCommesse() {
   }
 }
 
-function renderMatrixHeader(days) {
+function renderMatrixHeader(days, gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`) {
   matrixGrid.innerHTML = "";
   const header = document.createElement("div");
   header.className = "matrix-row matrix-header-row";
-  header.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
+  header.style.gridTemplateColumns = gridTemplateColumns;
 
   const empty = document.createElement("div");
   empty.className = "matrix-cell matrix-header matrix-resource";
@@ -6508,7 +8824,12 @@ function renderMatrixHeader(days) {
     if (d.getDay() === 5) {
       cell.classList.add("week-sep");
     }
-    cell.textContent = d.toLocaleDateString("it-IT", { weekday: "short", day: "2-digit", month: "short" });
+    const dayLabel = d.toLocaleDateString("it-IT", { weekday: "short", day: "2-digit", month: "short" });
+    const weekLabel = d.getDay() === 1 ? `W${String(getIsoWeekNumber(d)).padStart(2, "0")}` : "";
+    cell.innerHTML = `
+      <span class="matrix-header-day">${dayLabel}</span>
+      <span class="matrix-header-week${weekLabel ? "" : " matrix-header-week-placeholder"}">${weekLabel || "&nbsp;"}</span>
+    `;
     header.appendChild(cell);
   });
 
@@ -6516,10 +8837,117 @@ function renderMatrixHeader(days) {
   setupMatrixPan(header);
 }
 
+function applyMatrixPanPreview(drag, dx) {
+  if (!drag?.panTargets?.length) return;
+  const baseOffset = Number.isFinite(drag.baseOffsetPx)
+    ? drag.baseOffsetPx
+    : Number.isFinite(matrixState.panBaseOffsetPx)
+    ? matrixState.panBaseOffsetPx
+    : 0;
+  const safeDx = Number.isFinite(dx) ? dx : 0;
+  drag.currentDx = safeDx;
+  const totalDx = baseOffset + safeDx;
+  drag.panTargets.forEach((el) => {
+    el.style.transform = totalDx ? `translateX(${totalDx}px)` : "";
+  });
+}
+
+function clearMatrixPanPreview(drag) {
+  if (!drag) return;
+  if (drag.previewRafId) {
+    cancelAnimationFrame(drag.previewRafId);
+    drag.previewRafId = null;
+  }
+  if (!drag.panTargets?.length) return;
+  const baseOffset = Number.isFinite(matrixState.panBaseOffsetPx)
+    ? matrixState.panBaseOffsetPx
+    : Number.isFinite(drag.baseOffsetPx)
+    ? drag.baseOffsetPx
+    : 0;
+  const baseTransform = baseOffset ? `translateX(${baseOffset}px)` : "";
+  drag.panTargets.forEach((el) => {
+    el.style.transform = baseTransform;
+    el.style.transition = "";
+  });
+}
+
+function scheduleMatrixPanPreview(drag, dx) {
+  if (!drag) return;
+  drag.pendingDx = Number.isFinite(dx) ? dx : 0;
+  if (drag.previewRafId) return;
+  drag.previewRafId = requestAnimationFrame(() => {
+    drag.previewRafId = null;
+    applyMatrixPanPreview(drag, drag.pendingDx);
+  });
+}
+
+function flushMatrixPanPreview(drag) {
+  if (!drag) return;
+  if (drag.previewRafId) {
+    cancelAnimationFrame(drag.previewRafId);
+    drag.previewRafId = null;
+  }
+  if (Number.isFinite(drag.pendingDx)) {
+    applyMatrixPanPreview(drag, drag.pendingDx);
+  }
+}
+
+function applyMatrixStaticPanOffset() {
+  if (!matrixGrid) return;
+  matrixGrid
+    .querySelectorAll(".matrix-cell:not(.matrix-resource), .matrix-activity-bar")
+    .forEach((el) => {
+      el.style.transform = "";
+    });
+}
+
+function canStartMatrixPanFromTarget(target, origin = "header") {
+  if (!target) return false;
+  if (
+    target.closest(
+      ".matrix-activity-bar, .matrix-resize-handle, button, input, select, textarea, a, label, [contenteditable='true']"
+    )
+  ) {
+    return false;
+  }
+  if (origin === "grid") {
+    if (target.closest(".matrix-resource")) return false;
+    return Boolean(
+      target.closest(".matrix-row, .matrix-cell, .matrix-bar-layer, .matrix-section-cell, .matrix-section-row")
+    );
+  }
+  return true;
+}
+
 function setupMatrixPan(headerRow) {
   if (!headerRow || !matrixGrid) return;
+  if (!MATRIX_MOVEMENT_ENABLED) {
+    headerRow.onpointerdown = null;
+    headerRow.onpointermove = null;
+    headerRow.onpointerup = null;
+    headerRow.onpointerleave = null;
+    headerRow.onpointercancel = null;
+    matrixGrid.onpointerdown = null;
+    matrixGrid.onpointermove = null;
+    matrixGrid.onpointerup = null;
+    matrixGrid.onpointerleave = null;
+    matrixGrid.onpointercancel = null;
+    matrixGrid.classList.remove("is-panning");
+    matrixGrid.classList.remove("is-zooming-preview");
+    matrixGrid.classList.remove("is-pan-snapping");
+    matrixPan = null;
+    return;
+  }
+  const clearPreview = () => {
+    if (!matrixPan?.panTargets?.length) return;
+    matrixPan.panTargets.forEach((el) => {
+      el.style.transform = "";
+    });
+  };
   headerRow.onpointerdown = (e) => {
+    if (matrixPan) return;
     if (e.button !== 0) return;
+    if (!canStartMatrixPanFromTarget(e.target, "header")) return;
     if (e.target.closest("button, input, select, textarea")) return;
     e.preventDefault();
     const cells = headerRow.querySelectorAll(".matrix-cell");
@@ -6532,6 +8960,7 @@ function setupMatrixPan(headerRow) {
     matrixPan = {
       startX: e.clientX,
       startY: e.clientY,
+      pointerId: e.pointerId,
       baseDate: startOfWeek(matrixState.date),
       dayWidth,
       baseView: matrixState.view,
@@ -6544,29 +8973,29 @@ function setupMatrixPan(headerRow) {
   };
   headerRow.onpointermove = (e) => {
     if (!matrixPan || !matrixGrid) return;
+    if (matrixPan.pointerId != null && e.pointerId != null && e.pointerId !== matrixPan.pointerId) return;
     const dx = e.clientX - matrixPan.startX;
     const dy = e.clientY - matrixPan.startY;
-    if (Math.abs(dx) > 3) matrixPan.moved = true;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) matrixPan.moved = true;
     if (!matrixPan.mode) {
       if (Math.abs(dy) > 3 && Math.abs(dy) >= Math.abs(dx)) matrixPan.mode = "zoom";
       else if (Math.abs(dx) > 3) matrixPan.mode = "pan";
     }
     if (matrixPan.mode === "pan") {
       matrixPan.panTargets.forEach((el) => {
-        el.style.transform = `translateX(${dx}px)`;
+        el.style.transform = dx ? `translateX(${dx}px)` : "";
       });
     }
   };
   headerRow.onpointerup = async (e) => {
     if (!matrixPan) return;
+    if (matrixPan.pointerId != null && e.pointerId != null && e.pointerId !== matrixPan.pointerId) return;
     headerRow.releasePointerCapture?.(e.pointerId);
     const dx = e.clientX - matrixPan.startX;
     const dy = e.clientY - matrixPan.startY;
     const dayWidth = matrixPan.dayWidth;
     const shiftDays = dayWidth ? Math.round(-dx / dayWidth) : 0;
-    matrixPan.panTargets.forEach((el) => {
-      el.style.transform = "";
-    });
+    clearPreview();
     matrixGrid.classList.remove("is-panning");
     const mode = matrixPan.mode;
     const shouldMove = matrixPan.moved && mode === "pan" && shiftDays !== 0;
@@ -6579,24 +9008,40 @@ function setupMatrixPan(headerRow) {
       const nextIndex = Math.min(views.length - 1, Math.max(0, currentIndex + zoomSteps));
       matrixState.view = views[nextIndex];
       matrixState.customWeeks = null;
+      matrixState.panResidualDays = 0;
       matrixState.date = startOfWeek(matrixState.date);
+      if (matrixDate) matrixDate.value = formatDateInput(matrixState.date);
       setMatrixViewLabel();
       await loadMatrixAttivita();
       return;
     }
     if (!shouldMove) return;
+    matrixState.panResidualDays = 0;
     matrixState.date = addDays(matrixState.date, shiftDays);
     if (matrixDate) matrixDate.value = formatDateInput(matrixState.date);
     await loadMatrixAttivita();
   };
+  headerRow.onpointercancel = (e) => {
+    if (!matrixPan) return;
+    if (matrixPan.pointerId != null && e?.pointerId != null && e.pointerId !== matrixPan.pointerId) return;
+    headerRow.releasePointerCapture?.(matrixPan.pointerId ?? e?.pointerId);
+    clearPreview();
+    matrixGrid.classList.remove("is-panning");
+    matrixGrid.classList.remove("is-zooming-preview");
+    matrixGrid.classList.remove("is-pan-snapping");
+    matrixPan = null;
+  };
   headerRow.onpointerleave = () => {
     if (!matrixPan) return;
-    matrixPan.panTargets.forEach((el) => {
-      el.style.transform = "";
-    });
+    clearPreview();
     matrixGrid.classList.remove("is-panning");
     matrixPan = null;
   };
+  matrixGrid.onpointerdown = null;
+  matrixGrid.onpointermove = null;
+  matrixGrid.onpointerup = null;
+  matrixGrid.onpointerleave = null;
+  matrixGrid.onpointercancel = null;
 }
 
 function renderMatrixCommesse() {
@@ -6735,14 +9180,32 @@ function renderMatrix() {
   if (matrixPanel && matrixPanelHeader) {
     matrixPanel.style.setProperty("--matrix-panel-header-height", `${matrixPanelHeader.offsetHeight}px`);
   }
-  const days = weekDaysForMatrix(matrixState.date);
-  renderMatrixHeader(days);
+  const windowSpec = getMatrixRenderWindow(matrixState.date);
+  const days = windowSpec.days;
+  const visibleBusinessDays = windowSpec.visibleBusinessDays;
+  const bufferBusinessDays = windowSpec.bufferBusinessDays;
+  const resourceColWidth = 160;
+  const gridRect = matrixGrid.getBoundingClientRect();
+  const wrapRect = matrixWrap ? matrixWrap.getBoundingClientRect() : null;
+  const fallbackWidth = Math.max(320, (wrapRect ? wrapRect.width - 252 : 0));
+  const viewportWidth = Math.max(320, gridRect.width || matrixGrid.clientWidth || fallbackWidth);
+  const availableDaysWidth = Math.max(160, viewportWidth - resourceColWidth);
+  const dayWidthPx = Math.max(20, availableDaysWidth / Math.max(1, visibleBusinessDays));
+  const gridTemplateColumns = `160px repeat(${days.length}, ${dayWidthPx}px)`;
+  const residualDays = 0;
+  matrixState.panResidualDays = 0;
+  matrixState.panVisibleBusinessDays = visibleBusinessDays;
+  matrixState.panBufferBusinessDays = bufferBusinessDays;
+  matrixState.panDayWidthPx = dayWidthPx;
+  matrixState.panBaseOffsetPx = (-bufferBusinessDays + residualDays) * dayWidthPx;
+  renderMatrixHeader(days, gridTemplateColumns);
 
   if (!matrixState.risorse.length) {
     const empty = document.createElement("div");
     empty.className = "matrix-empty";
     empty.textContent = "Nessuna risorsa.";
     matrixGrid.appendChild(empty);
+    applyMatrixStaticPanOffset();
     return;
   }
 
@@ -6772,7 +9235,7 @@ function renderMatrix() {
   orderedLabels.forEach((label) => {
     const sectionRow = document.createElement("div");
     sectionRow.className = "matrix-row matrix-section-row";
-    sectionRow.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
+    sectionRow.style.gridTemplateColumns = gridTemplateColumns;
     const sectionCell = document.createElement("div");
     sectionCell.className = "matrix-section-cell";
     sectionCell.style.gridColumn = `1 / span ${days.length + 1}`;
@@ -6800,7 +9263,7 @@ function renderMatrix() {
       const row = document.createElement("div");
       row.className = "matrix-row";
       row.dataset.risorsaId = String(r.id);
-      row.style.gridTemplateColumns = `160px repeat(${days.length}, minmax(0, 1fr))`;
+      row.style.gridTemplateColumns = gridTemplateColumns;
       row.style.position = "relative";
 
       const nameCell = document.createElement("div");
@@ -6814,10 +9277,10 @@ function renderMatrix() {
 
     const rowActivities = matrixState.attivita.filter((a) => a.risorsa_id === r.id);
     const filterAttivita = matrixState.selectedAttivita.size > 0;
-    const filterCommesse = matrixState.selectedCommesse.size > 0;
+    const commessaFilter = getActiveMatrixCommessaFilter();
     const visibleActivities = rowActivities.filter((a) => {
       if (filterAttivita && !matrixState.selectedAttivita.has(a.titolo)) return false;
-      if (filterCommesse && !matrixState.selectedCommesse.has(a.commessa_id)) return false;
+      if (commessaFilter.active && !commessaFilter.ids.has(String(a.commessa_id || ""))) return false;
       return true;
     });
 
@@ -6863,6 +9326,8 @@ function renderMatrix() {
       cell.addEventListener("dragover", (e) => {
         if (!state.canWrite) return;
         e.preventDefault();
+        updateMatrixDropEffect(e);
+        updateMatrixDragFollowerPosition(e.clientX, e.clientY);
       });
       cell.addEventListener("dragenter", (e) => {
         if (!state.canWrite) return;
@@ -6876,6 +9341,7 @@ function renderMatrix() {
         if (!state.canWrite) return;
         e.preventDefault();
         cell.classList.remove("drag-over");
+        markMatrixDragDropHandled();
         await handleMatrixDropOnCell(cell, e);
       });
 
@@ -6926,14 +9392,27 @@ function renderMatrix() {
           data_fine: endAt.toISOString(),
           stato: "pianificata",
         }));
+        const includesTelaio = Boolean(commessaId) && attivitaList.some((title) => isTelaioActivityTitle(title));
+        let telaioPlannedSynced = true;
+        if (commessaId && attivitaList.some((title) => isTelaioActivityTitle(title))) {
+          const ok = await confirmTelaioDuplicateAssignment(commessaId);
+          if (!ok) return;
+        }
         const { error } = await supabase.from("attivita").insert(rows);
         if (error) {
           setStatus(`Assignment error: ${error.message}`, "error");
           return;
         }
-        setStatus(rows.length > 1 ? "Activities assigned." : "Activity assigned.", "ok");
+        if (includesTelaio) {
+          telaioPlannedSynced = await syncTelaioPlannedDateFromMatrix(commessaId, endAt);
+        }
+        if (!telaioPlannedSynced) {
+          setStatus("Activities assigned, ma data telaio pianificata non aggiornata.", "error");
+        } else {
+          setStatus(rows.length > 1 ? "Activities assigned." : "Activity assigned.", "ok");
+        }
         await loadMatrixAttivita();
-        await refreshTodoRealtimeSnapshot();
+        await refreshTodoRealtimeSnapshot([commessaId]);
       });
 
       row.appendChild(cell);
@@ -6966,7 +9445,7 @@ function renderMatrix() {
       const startIdx = dayIndex.get(startKey);
       const endIdx = dayIndex.get(endKey);
       if (startIdx == null || endIdx == null) return;
-      bars.push({ a, laneIndex, startIdx, endIdx, startKey });
+      bars.push({ a, laneIndex, startIdx, endIdx, startKey, endKey });
     });
 
     const laneHeight = 54;
@@ -7013,7 +9492,9 @@ function renderMatrix() {
       bar.dataset.attivita = b.a.titolo || "";
       bar.dataset.reparto = getRisorsaDeptName(b.a.risorsa_id) || "";
       bar.classList.toggle("is-done", b.a.stato === "completata");
+      applyMatrixBarPastClass(bar, b.a);
       applyMatrixBarClientFlowClasses(bar, b.a, bar.dataset.reparto || "");
+      applyMatrixBarTelaioOrderClass(bar, b.a);
       if (matrixState.colorMode !== "none" && !isLavender) {
         const key =
           matrixState.colorMode === "activity"
@@ -7046,12 +9527,31 @@ function renderMatrix() {
         closeMatrixQuickMenu();
         matrixState.suppressClickUntil = Date.now() + 300;
         matrixState.draggingId = b.a.id;
+        const barRect = bar.getBoundingClientRect();
+        const hasPointer = Number.isFinite(e.clientX) && Number.isFinite(e.clientY);
+        matrixState.dragPointerOffsetX = hasPointer ? e.clientX - barRect.left : barRect.width / 2;
+        matrixState.dragPointerOffsetY = hasPointer ? e.clientY - barRect.top : barRect.height / 2;
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "copyMove";
+          try {
+            e.dataTransfer.setDragImage(matrixTransparentDragImage, 0, 0);
+          } catch (_err) {
+            // Ignore browsers that block custom drag image.
+          }
+        }
+        createMatrixDragFollower(bar, e);
         if (matrixGrid) matrixGrid.classList.add("matrix-dragging");
         bar.classList.add("dragging");
         e.dataTransfer.setData("text/plain", b.a.id);
       });
       bar.addEventListener("dragend", () => {
         matrixState.draggingId = null;
+        matrixState.dragPointerOffsetX = null;
+        matrixState.dragPointerOffsetY = null;
+        if (!matrixState.dragDropHandled) {
+          removeMatrixDragFollower();
+          restoreMatrixDragSourceVisual();
+        }
         if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
         bar.classList.remove("dragging");
       });
@@ -7067,10 +9567,16 @@ function renderMatrix() {
           closeTodoStatusMenu();
           closeTodoGlobalStatusMenu();
           if (b.a.commessa_id) {
-            applyCommessaHighlight(b.a.commessa_id);
+            applyCommessaHighlight(b.a.commessa_id, {
+              preserveViewport: true,
+              anchorEl: bar,
+            });
             commessaLongPressSuppress = true;
           } else {
-            clearCommessaHighlight();
+            clearCommessaHighlight({
+              preserveViewport: true,
+              anchorEl: bar,
+            });
           }
           matrixState.suppressClickUntil = Date.now() + 600;
         }, 450);
@@ -7084,6 +9590,8 @@ function renderMatrix() {
       bar.addEventListener("dragover", (e) => {
         if (!state.canWrite) return;
         e.preventDefault();
+        updateMatrixDropEffect(e);
+        updateMatrixDragFollowerPosition(e.clientX, e.clientY);
       });
       bar.addEventListener("drop", async (e) => {
         if (!state.canWrite) return;
@@ -7092,6 +9600,7 @@ function renderMatrix() {
         const elements = document.elementsFromPoint(e.clientX, e.clientY);
         const cell = elements.find((el) => el.classList && el.classList.contains("matrix-cell"));
         if (cell) {
+          markMatrixDragDropHandled();
           await handleMatrixDropOnCell(cell, e);
         }
       });
@@ -7104,7 +9613,10 @@ function renderMatrix() {
           return;
         }
         closeMatrixQuickMenu();
-        clearCommessaHighlight();
+        clearCommessaHighlight({
+          preserveViewport: true,
+          anchorEl: bar,
+        });
         if (!b.a.titolo) {
           openActivityModal(b.a);
           return;
@@ -7124,27 +9636,38 @@ function renderMatrix() {
         matrixState.suppressClickUntil = Date.now() + 400;
         const rowEl = bar.closest(".matrix-row");
         const layerEl = bar.closest(".matrix-bar-layer");
-        const previewBar = bar.cloneNode(true);
-        previewBar.classList.add("resizing-preview");
-        previewBar.classList.remove("dragging");
-        previewBar.style.pointerEvents = "none";
-        if (layerEl) {
-          const layerRect = layerEl.getBoundingClientRect();
-          const barRect = bar.getBoundingClientRect();
-          previewBar.style.position = "absolute";
-          previewBar.style.top = `${barRect.top - layerRect.top}px`;
-          previewBar.style.left = `${barRect.left - layerRect.left}px`;
-          previewBar.style.width = `${barRect.width}px`;
-          previewBar.style.height = `${barRect.height}px`;
-          previewBar.style.marginTop = "0";
-          previewBar.style.gridColumn = "auto";
+        const layerRect = layerEl ? layerEl.getBoundingClientRect() : null;
+        const barRect = bar.getBoundingClientRect();
+        const originalBarInitialStyle = {
+          position: bar.style.position || "",
+          top: bar.style.top || "",
+          left: bar.style.left || "",
+          width: bar.style.width || "",
+          height: bar.style.height || "",
+          marginTop: bar.style.marginTop || "",
+          gridColumn: bar.style.gridColumn || "",
+          zIndex: bar.style.zIndex || "",
+          transition: bar.style.transition || "",
+        };
+        if (layerRect) {
+          bar.style.position = "absolute";
+          bar.style.top = `${barRect.top - layerRect.top}px`;
+          bar.style.left = `${barRect.left - layerRect.left}px`;
+          bar.style.width = `${barRect.width}px`;
+          bar.style.height = `${barRect.height}px`;
+          bar.style.marginTop = "0";
+          bar.style.gridColumn = "auto";
+          bar.style.zIndex = "5";
+          bar.style.transition = "none";
         }
-        if (layerEl) layerEl.appendChild(previewBar);
         const startDate = startOfDay(new Date(b.a.data_inizio));
         const endDate = new Date(b.a.data_fine);
+        const dayCells = rowEl ? Array.from(rowEl.querySelectorAll(".matrix-cell[data-day]")) : [];
         const startCell = rowEl ? rowEl.querySelector(`.matrix-cell[data-day="${b.startKey}"]`) : null;
+        const endCell = rowEl ? rowEl.querySelector(`.matrix-cell[data-day="${b.endKey}"]`) : null;
+        const startCellIndex = startCell ? dayCells.indexOf(startCell) : -1;
+        const endCellIndex = endCell ? dayCells.indexOf(endCell) : -1;
         const startCellRect = startCell ? startCell.getBoundingClientRect() : null;
-        const layerRect = layerEl ? layerEl.getBoundingClientRect() : null;
         matrixState.resizing = {
           attivita: b.a,
           startDayKey: b.startKey,
@@ -7156,15 +9679,24 @@ function renderMatrix() {
             s: endDate.getSeconds(),
             ms: endDate.getMilliseconds(),
           },
-          targetDayKey: b.startKey,
+          targetDayKey: b.endKey || b.startKey,
           startIdx: b.startIdx,
           rowEl,
           layerEl,
+          dayCells,
+          startCellIndex: startCellIndex >= 0 ? startCellIndex : b.startIdx,
+          initialTargetIndex: endCellIndex >= 0 ? endCellIndex : b.endIdx,
+          dragStartX: e.clientX,
           layerRect,
           startCellRect,
-          previewBar,
+          previewBar: bar,
+          usesOriginalBarForResize: true,
+          originalBarInitialStyle,
           originalBar: bar,
+          targetCell: null,
         };
+        if (endCell) setMatrixResizeTargetCell(matrixState.resizing, endCell);
+        else if (startCell) setMatrixResizeTargetCell(matrixState.resizing, startCell);
         bar.classList.add("resizing");
       });
       bar.appendChild(handle);
@@ -7174,6 +9706,7 @@ function renderMatrix() {
       matrixGrid.appendChild(row);
     });
   });
+  applyMatrixStaticPanOffset();
   if (commessaHighlightId) {
     applyCommessaHighlight(commessaHighlightId);
   } else if (matrixState.selectedAttivita.size > 0) {
@@ -7194,7 +9727,7 @@ function renderMatrixReport() {
     return;
   }
   const today = startOfDay(new Date());
-  matrixReportRange.textContent = `Oggi: ${formatDateLocal(today)}`;
+  matrixReportRange.textContent = "";
 
   const filters = getReportFilters();
   const todoCommesse = state.commesse.slice().sort(compareCommesseDesc);
@@ -7269,6 +9802,29 @@ function renderMatrixReport() {
   matrixReportGrid.innerHTML = "";
 
   let lastYear = null;
+  const getReportActivityDate = (entry) => {
+    if (!entry) return null;
+    const raw = entry.end || entry.start || null;
+    if (!raw) return null;
+    const parsed = raw instanceof Date ? new Date(raw.getTime()) : new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return null;
+    const year = parsed.getFullYear();
+    if (year < 2000 || year > 2100) return null;
+    return parsed;
+  };
+  const pickLatestActivityByDate = (entries) => {
+    let picked = null;
+    let pickedTime = -Infinity;
+    (entries || []).forEach((entry) => {
+      const date = getReportActivityDate(entry);
+      if (!date) return;
+      const t = date.getTime();
+      if (t <= pickedTime) return;
+      picked = { entry, date };
+      pickedTime = t;
+    });
+    return picked;
+  };
   commesse.forEach((c) => {
     const yearKey = String(c.anno || getCommessaYear(c) || "Senza anno");
     if (showYearHeaders && yearKey !== lastYear) {
@@ -7281,23 +9837,56 @@ function renderMatrixReport() {
 
     const targetRaw = c.data_consegna_macchina || c.data_consegna_prevista || c.data_consegna || "";
     const targetDate = targetRaw ? new Date(targetRaw) : null;
-    const ordineRaw = c.data_ordine_telaio || "";
+    const telaioProgrammataRaw = c.data_conferma_consegna_telaio || "";
+    const telaioProgrammataDate = telaioProgrammataRaw ? new Date(telaioProgrammataRaw) : null;
+    const telaioRichiestaRaw = c.data_ordine_telaio || "";
+    const telaioRichiestaDate = telaioRichiestaRaw ? new Date(telaioRichiestaRaw) : null;
+    const telaioOrdinatoRaw = c.data_consegna_telaio_effettiva || "";
+    const telaioOrdinatoDate = telaioOrdinatoRaw ? new Date(telaioOrdinatoRaw) : null;
     const kitRaw = c.data_arrivo_kit_cavi || "";
-    const ordineDate = ordineRaw ? new Date(ordineRaw) : null;
     const kitDate = kitRaw ? new Date(kitRaw) : null;
     const prelievoRaw = c.data_prelievo || "";
     const prelievoDate = prelievoRaw ? new Date(prelievoRaw) : null;
     const isDateOk = (d) => d && !Number.isNaN(d.getTime()) && d.getFullYear() >= 2000 && d.getFullYear() <= 2100;
     const safeTarget = isDateOk(targetDate) ? targetDate : null;
-    const safeOrdine = isDateOk(ordineDate) ? ordineDate : null;
+    const safeTelaioProgrammata = isDateOk(telaioProgrammataDate) ? telaioProgrammataDate : null;
+    const safeTelaioRichiesta = isDateOk(telaioRichiestaDate) ? telaioRichiestaDate : null;
+    const safeTelaioOrdinato = isDateOk(telaioOrdinatoDate) ? telaioOrdinatoDate : null;
+    const telaioOrdinatoFlag = Boolean(c.telaio_consegnato);
     const safeKit = isDateOk(kitDate) ? kitDate : null;
     const safePrelievo = isDateOk(prelievoDate) ? prelievoDate : null;
-    const targetInfo = getBusinessDiffInfo(today, safeTarget);
-    const ordineInfo = getBusinessDiffInfo(today, safeOrdine);
+    const thermoEntries = getTodoEntriesForCell(c.id, TODO_ACTIVITY_PRIMARY_PHASE_KEY).filter(
+      (entry) => normalizePhaseKey(entry.stato) !== "annullata"
+    );
+    const thermoDone = pickLatestActivityByDate(
+      thermoEntries.filter((entry) => normalizePhaseKey(entry.stato) === "completata")
+    );
+    const thermoPlanned = thermoDone
+      ? null
+      : pickLatestActivityByDate(thermoEntries.filter((entry) => normalizePhaseKey(entry.stato) === "pianificata"));
+    const thermoFineDate = thermoDone?.date || thermoPlanned?.date || null;
+    const thermoFineInfo = thermoDone
+      ? { label: "done", cls: "is-ok" }
+      : thermoPlanned
+      ? { label: "planned", cls: "is-planned" }
+      : { label: "n/d", cls: "" };
+    const telaioProgrammataInfo = getBusinessDiffInfo(today, safeTelaioProgrammata);
+    const telaioRichiestaInfo = getBusinessDiffInfo(today, safeTelaioRichiesta);
+    const telaioOrdinatoInfo = telaioOrdinatoFlag
+      ? safeTelaioOrdinato
+        ? { label: "ordinato", cls: "is-ok" }
+        : { label: "manca data", cls: "is-late" }
+      : { label: "non ordinato", cls: "" };
     const missingPrelievo = !safePrelievo;
     const missingKit = !safeKit;
-    const missingOrdine = !safeOrdine || missingPrelievo;
+    const missingOrdine = !safeTelaioRichiesta || missingPrelievo;
     const missingTarget = !safeTarget;
+    const codeInfo = parseCommessaCode(c.codice || "");
+    const numeroLabel = c.numero ?? codeInfo.num ?? c.codice ?? "-";
+    const annoLabel = c.anno ?? codeInfo.year ?? "-";
+    const descrizioneLabel = c.titolo || "Senza titolo";
+    const machineTypeRaw = String(c.tipo_macchina || "Altro tipo").trim() || "Altro tipo";
+    const machineTypeLabel = getMachineTypeDisplayLabel(machineTypeRaw);
 
     const item = document.createElement("div");
     item.className = "report-item";
@@ -7305,14 +9894,19 @@ function renderMatrixReport() {
     item.innerHTML = `
       <div class="report-main">
         <button class="report-title report-commessa-link" type="button" data-commessa-id="${c.id}">
-          ${c.codice} - ${c.titolo || "Senza titolo"}
+          <span class="report-title-parts">
+            <span class="report-title-num">${escapeHtml(String(numeroLabel))}</span>
+            <span class="report-title-year">${escapeHtml(String(annoLabel))}</span>
+            <span class="report-title-desc" title="${escapeHtml(descrizioneLabel)}">${escapeHtml(descrizioneLabel)}</span>
+          </span>
+          <span class="report-machine-pill" title="${escapeHtml(machineTypeRaw)}">${escapeHtml(machineTypeLabel)}</span>
         </button>
         <div class="report-meta">Stato: ${c.stato || "-"} - Cliente: ${c.cliente || "-"}</div>
         ${scheduleHtml}
         ${
           missingOrdine || missingTarget
             ? `<div class="report-missing">
-                ${!safeOrdine ? `<span class="missing-pill">Manca data ordine telaio</span>` : ""}
+                ${!safeTelaioRichiesta ? `<span class="missing-pill">Manca data ordine telaio</span>` : ""}
                 ${missingKit ? `<span class="missing-pill">Manca data arrivo kit cavi</span>` : ""}
                 ${missingPrelievo ? `<span class="missing-pill">Manca data prelievo materiali</span>` : ""}
                 ${missingTarget ? `<span class="missing-pill">Manca data consegna macchina</span>` : ""}
@@ -7320,15 +9914,25 @@ function renderMatrixReport() {
             : ""
         }
       </div>
-      <div class="report-milestone ${ordineInfo.cls}">
-        <div class="report-label">Ordine telaio</div>
-        <div class="report-value">${safeOrdine ? formatDateDMY(safeOrdine) : "-"}</div>
-        <div class="report-sub">${ordineInfo.label}</div>
+      <div class="report-milestone ${thermoFineInfo.cls}">
+        <div class="report-label">Fine progettazione termodinamica</div>
+        <div class="report-value">${thermoFineDate ? formatDateDMY(thermoFineDate) : "-"}</div>
+        <div class="report-sub">${thermoFineInfo.label}</div>
       </div>
-      <div class="report-milestone ${targetInfo.cls}">
-        <div class="report-label">Target consegna</div>
-        <div class="report-value">${safeTarget ? formatDateDMY(safeTarget) : "-"}</div>
-        <div class="report-sub">${targetInfo.label}</div>
+      <div class="report-milestone ${telaioProgrammataInfo.cls}">
+        <div class="report-label">Data telaio programmata</div>
+        <div class="report-value">${safeTelaioProgrammata ? formatDateDMY(safeTelaioProgrammata) : "-"}</div>
+        <div class="report-sub">${telaioProgrammataInfo.label}</div>
+      </div>
+      <div class="report-milestone ${telaioOrdinatoInfo.cls}">
+        <div class="report-label">Data telaio ordinato</div>
+        <div class="report-value">${telaioOrdinatoFlag && safeTelaioOrdinato ? formatDateDMY(safeTelaioOrdinato) : "-"}</div>
+        <div class="report-sub">${telaioOrdinatoInfo.label}</div>
+      </div>
+      <div class="report-milestone ${telaioRichiestaInfo.cls}">
+        <div class="report-label">Data telaio richiesta da produzione</div>
+        <div class="report-value">${safeTelaioRichiesta ? formatDateDMY(safeTelaioRichiesta) : "-"}</div>
+        <div class="report-sub">${telaioRichiestaInfo.label}</div>
       </div>
     `;
     const commessaBtn = item.querySelector(".report-commessa-link");
@@ -7731,6 +10335,13 @@ function buildTodoClientFlowKey(commessaId, titolo, repartoName = "") {
 
 const TODO_CLIENT_FLOW_TRACKED_TITLES = new Set(["preliminare", "3d"]);
 const TODO_TELAIO_ORDER_TRACKED_TITLES = new Set(["telaio"]);
+const NOTIFICATION_COMMESSA_DEADLINES = [
+  { field: "data_ordine_telaio", label: "Telaio target" },
+  { field: "data_arrivo_kit_cavi", label: "Arrivo kit cavi" },
+  { field: "data_prelievo", label: "Prelievo materiali" },
+  { field: "data_consegna_macchina", label: "Consegna macchina" },
+];
+const NOTIFICATION_PHASE_CLASS_KEYS = new Set(["preliminare", "3d"]);
 
 function isTodoClientFlowTracked(titolo, repartoName = "") {
   const titleKey = normalizePhaseKey(titolo || "");
@@ -7878,6 +10489,50 @@ function applyMatrixBarClientFlowClasses(bar, activity, repartoName = "") {
   bar.classList.add("is-client-sent");
 }
 
+function applyMatrixBarTelaioOrderClass(bar, activity) {
+  if (!bar) return;
+  bar.classList.remove("is-telaio-ordered");
+  if (!activity) return;
+  const titleKey = normalizePhaseKey(activity.titolo || bar.dataset.attivita || "");
+  if (titleKey !== "telaio") return;
+  const commessaId = activity.commessa_id ?? activity.commessaId ?? bar.dataset.commessaId ?? "";
+  if (!commessaId) return;
+  const commessa = findCommessaInState(commessaId);
+  const isOrdered =
+    Boolean(commessa?.telaio_consegnato) && Boolean(parseIsoDateOnly(commessa?.data_consegna_telaio_effettiva || null));
+  if (isOrdered) bar.classList.add("is-telaio-ordered");
+}
+
+function applyMatrixBarPastClass(bar, activity) {
+  if (!bar) return;
+  bar.classList.remove("is-past-task");
+  if (!activity) return;
+  const statoKey = normalizePhaseKey(activity.stato || (bar.classList.contains("is-done") ? "completata" : ""));
+  if (statoKey !== "completata") return;
+  const endRaw = activity.data_fine || null;
+  if (!endRaw) return;
+  const endDate = startOfDay(new Date(endRaw));
+  if (Number.isNaN(endDate.getTime())) return;
+  const today = startOfDay(new Date());
+  if (endDate.getTime() < today.getTime()) bar.classList.add("is-past-task");
+}
+
+function refreshMatrixTelaioOrderIndicators(commessaId = null) {
+  if (!matrixGrid) return;
+  const targetId = commessaId != null ? String(commessaId) : "";
+  const byId = new Map((matrixState.attivita || []).map((entry) => [String(entry.id), entry]));
+  matrixGrid.querySelectorAll(".matrix-activity-bar[data-activity-id]").forEach((bar) => {
+    const barCommessaId = String(bar.dataset.commessaId || "");
+    if (targetId && barCommessaId !== targetId) return;
+    const entry = byId.get(String(bar.dataset.activityId || ""));
+    const fallback = entry || {
+      commessa_id: barCommessaId,
+      titolo: bar.dataset.attivita || "",
+    };
+    applyMatrixBarTelaioOrderClass(bar, fallback);
+  });
+}
+
 function refreshMatrixClientFlowIndicatorsForTarget(target) {
   if (!matrixGrid || !target?.commessaId || !target?.titolo) return;
   const commessaKey = String(target.commessaId);
@@ -7896,6 +10551,7 @@ function refreshMatrixClientFlowIndicatorsForTarget(target) {
       reparto: target.reparto || "",
     };
     applyMatrixBarClientFlowClasses(bar, activity, target.reparto || "");
+    applyMatrixBarTelaioOrderClass(bar, activity);
   });
 }
 
@@ -8148,12 +10804,59 @@ function refreshTodoCellVisualFromState(target) {
   }
 }
 
-const TODO_GLOBAL_STATUS_ORDER = ["In corso", "Rilasciata a prod.", "Evasa"];
+const TODO_GLOBAL_STATUS_ORDER = ["In corso", "Rilasciata a produzione", "Sospesa", "Evasa"];
 const TODO_GLOBAL_STATUS_TO_DB = {
   "In corso": "in_corso",
-  "Rilasciata a prod.": "sospesa",
+  "Rilasciata a produzione": "rilasciata_produzione",
+  Sospesa: "sospesa",
   Evasa: "chiusa",
 };
+const TODO_GLOBAL_RELEASE_DB_STATUS = "rilasciata_produzione";
+
+function isCommessaActivityCompletedByPhaseKey(commessaId, phaseKey) {
+  if (!commessaId || !phaseKey) return false;
+  const idKey = String(commessaId);
+  const phase = normalizePhaseKey(phaseKey);
+  const reportEntries = state.reportActivitiesMap.get(idKey) || [];
+  if (
+    reportEntries.some(
+      (entry) =>
+        normalizePhaseKey(entry.titolo || "") === phase && normalizePhaseKey(entry.stato || "") === "completata"
+    )
+  ) {
+    return true;
+  }
+  return (matrixState.attivita || []).some(
+    (entry) =>
+      String(entry.commessa_id || "") === idKey &&
+      normalizePhaseKey(entry.titolo || "") === phase &&
+      normalizePhaseKey(entry.stato || "") === "completata"
+  );
+}
+
+function getCommessaReleaseReadiness(commessa, overrides = {}) {
+  const telaioOrdered = Object.prototype.hasOwnProperty.call(overrides, "telaioOrdered")
+    ? Boolean(overrides.telaioOrdered)
+    : Boolean(commessa?.telaio_consegnato);
+  const telaioOrderedDateRaw = Object.prototype.hasOwnProperty.call(overrides, "telaioOrderedDate")
+    ? overrides.telaioOrderedDate
+    : commessa?.data_consegna_telaio_effettiva || null;
+  const telaioOrderedDate = parseIsoDateOnly(telaioOrderedDateRaw || null);
+  const termoDone = isCommessaActivityCompletedByPhaseKey(commessa?.id, TODO_ACTIVITY_PRIMARY_PHASE_KEY);
+  const missing = [];
+  if (!telaioOrdered || !telaioOrderedDate) missing.push("Telaio ordinato con data");
+  if (!termoDone) missing.push("Progettazione termodinamica in DONE");
+  return {
+    ok: missing.length === 0,
+    missing,
+  };
+}
+
+function getCommessaReleaseReadinessMessage(commessa, overrides = {}) {
+  const readiness = getCommessaReleaseReadiness(commessa, overrides);
+  if (readiness.ok) return "";
+  return `Per impostare \"Rilasciata a produzione\" servono: ${readiness.missing.join(" + ")}.`;
+}
 
 function canEditTodoGlobalStatus() {
   const role = getTodoRole();
@@ -8162,11 +10865,13 @@ function canEditTodoGlobalStatus() {
 
 function getTodoGlobalCommessaStatus(commessa) {
   const raw = normalizePhaseKey(commessa?.stato || "");
+  if (raw === "nuova" || raw.includes("nuov")) return { label: "Nuova", cls: "todo-global-nuova" };
   if (raw === "in_corso") return { label: "In corso", cls: "todo-global-in-corso" };
-  if (raw === "sospesa") return { label: "Rilasciata a prod.", cls: "todo-global-rilasciata" };
+  if (raw === "rilasciata_produzione") return { label: "Rilasciata a produzione", cls: "todo-global-rilasciata" };
+  if (raw === "sospesa") return { label: "Sospesa", cls: "todo-global-sospesa" };
   if (raw === "chiusa") return { label: "Evasa", cls: "todo-global-evasa" };
   if (raw.includes("evas")) return { label: "Evasa", cls: "todo-global-evasa" };
-  if (raw.includes("rilasci")) return { label: "Rilasciata a prod.", cls: "todo-global-rilasciata" };
+  if (raw.includes("rilasci")) return { label: "Rilasciata a produzione", cls: "todo-global-rilasciata" };
   if (!raw || raw.includes("corso")) return { label: "In corso", cls: "todo-global-in-corso" };
   return { label: commessa?.stato || "In corso", cls: "todo-global-in-corso" };
 }
@@ -8237,9 +10942,28 @@ async function updateTodoGlobalStatus(commessa, statusLabel) {
     return false;
   }
   const dbValue = TODO_GLOBAL_STATUS_TO_DB[statusLabel] || statusLabel;
+  const currentDbValue = normalizePhaseKey(commessa?.stato || "");
+  if (dbValue === TODO_GLOBAL_RELEASE_DB_STATUS && currentDbValue !== TODO_GLOBAL_RELEASE_DB_STATUS) {
+    const msg = getCommessaReleaseReadinessMessage(commessa);
+    if (msg) {
+      setStatus(msg, "error");
+      showToast(msg, "error");
+      return false;
+    }
+  }
+  if (dbValue === "sospesa" && currentDbValue !== "sospesa") {
+    const confirmed = await openConfirmModal(
+      "Confermi di mettere la commessa in stato SOSPESA?",
+      null,
+      { okLabel: "Sospendi", cancelLabel: "Annulla" }
+    );
+    if (!confirmed) return false;
+  }
   const { error } = await supabase.from("commesse").update({ stato: dbValue }).eq("id", commessa.id);
   if (error) {
-    setStatus(`Update error: ${error.message}`, "error");
+    const msg = formatDbErrorMessage(error);
+    setStatus(`Update error: ${msg}`, "error");
+    showToast(msg, "error");
     return false;
   }
   updateCommessaInState(commessa.id, { stato: dbValue });
@@ -8294,6 +11018,14 @@ function renderTodoSection(commesse) {
       columns.push({ reparto: g.reparto, titolo: name });
     });
   });
+  const todoFilters = getTodoFilters();
+  const showPriorityColumn =
+    (todoFilters.priorityMode === "asc" || todoFilters.priorityMode === "desc") &&
+    Boolean(todoFilters.priorityField);
+  const priorityField = showPriorityColumn ? todoFilters.priorityField : "";
+  const priorityLabel = showPriorityColumn ? getTodoPriorityFieldLabel(priorityField) : "";
+  const activityStartCol = showPriorityColumn ? 5 : 4;
+
   const filteredCommesse = applyTodoFilters(commesse, columns);
   if (!filteredCommesse.length) {
     updateTodoInfoBar([], columns);
@@ -8323,7 +11055,8 @@ function renderTodoSection(commesse) {
     loadTodoClientFlowsFor(filteredCommesse);
   }
 
-  const gridCols = `240px 160px repeat(${columns.length}, minmax(120px, 1fr))`;
+  const priorityColWidth = showPriorityColumn ? "140px " : "";
+  const gridCols = `240px 156px 184px ${priorityColWidth}repeat(${columns.length}, minmax(120px, 1fr))`;
   const headerTable = document.createElement("div");
   headerTable.className = "todo-table todo-table-head";
   headerTable.style.gridTemplateColumns = gridCols;
@@ -8339,14 +11072,30 @@ function renderTodoSection(commesse) {
   headerBlank.textContent = "";
   headerTable.appendChild(headerBlank);
 
+  const machineBlank = document.createElement("div");
+  machineBlank.className = "todo-cell todo-head";
+  machineBlank.style.gridRow = "1";
+  machineBlank.style.gridColumn = "2";
+  machineBlank.textContent = "";
+  headerTable.appendChild(machineBlank);
+
   const statusBlank = document.createElement("div");
   statusBlank.className = "todo-cell todo-head";
   statusBlank.style.gridRow = "1";
-  statusBlank.style.gridColumn = "2";
+  statusBlank.style.gridColumn = "3";
   statusBlank.textContent = "";
   headerTable.appendChild(statusBlank);
 
-  let colStart = 3;
+  if (showPriorityColumn) {
+    const priorityBlank = document.createElement("div");
+    priorityBlank.className = "todo-cell todo-head";
+    priorityBlank.style.gridRow = "1";
+    priorityBlank.style.gridColumn = "4";
+    priorityBlank.textContent = "";
+    headerTable.appendChild(priorityBlank);
+  }
+
+  let colStart = activityStartCol;
   orderedGroups.forEach((group) => {
     const cell = document.createElement("div");
     cell.className = "todo-cell todo-head todo-group";
@@ -8368,14 +11117,30 @@ function renderTodoSection(commesse) {
   commessaHeader.textContent = "Commessa";
   headerTable.appendChild(commessaHeader);
 
+  const machineHeader = document.createElement("div");
+  machineHeader.className = "todo-cell todo-head todo-machine-head";
+  machineHeader.style.gridRow = "2";
+  machineHeader.style.gridColumn = "2";
+  machineHeader.textContent = "Tipo macchina";
+  headerTable.appendChild(machineHeader);
+
   const statusHeader = document.createElement("div");
   statusHeader.className = "todo-cell todo-head";
   statusHeader.style.gridRow = "2";
-  statusHeader.style.gridColumn = "2";
+  statusHeader.style.gridColumn = "3";
   statusHeader.textContent = "Stato";
   headerTable.appendChild(statusHeader);
 
-  colStart = 3;
+  if (showPriorityColumn) {
+    const priorityHeader = document.createElement("div");
+    priorityHeader.className = "todo-cell todo-head todo-priority-head";
+    priorityHeader.style.gridRow = "2";
+    priorityHeader.style.gridColumn = "4";
+    priorityHeader.textContent = `Priorita: ${priorityLabel}`;
+    headerTable.appendChild(priorityHeader);
+  }
+
+  colStart = activityStartCol;
   columns.forEach((col) => {
     const cell = document.createElement("div");
     cell.className = "todo-cell todo-head todo-activity-head";
@@ -8404,11 +11169,21 @@ function renderTodoSection(commesse) {
     });
     bodyTable.appendChild(info);
 
+    const machineCell = document.createElement("div");
+    machineCell.className = "todo-cell todo-machine-cell";
+    machineCell.style.gridRow = String(rowIndex);
+    machineCell.style.gridColumn = "2";
+    machineCell.dataset.todoRow = rowKey;
+    const machineTypeRaw = String(commessa.tipo_macchina || "Altro tipo").trim() || "Altro tipo";
+    const machineTypeLabel = getMachineTypeDisplayLabel(machineTypeRaw);
+    machineCell.innerHTML = `<span class="todo-machine-value" title="${escapeHtml(machineTypeRaw)}">${escapeHtml(machineTypeLabel)}</span>`;
+    bodyTable.appendChild(machineCell);
+
     const globalStatus = getTodoGlobalCommessaStatus(commessa);
     const statusCell = document.createElement("div");
     statusCell.className = "todo-cell todo-commessa-status";
     statusCell.style.gridRow = String(rowIndex);
-    statusCell.style.gridColumn = "2";
+    statusCell.style.gridColumn = "3";
     statusCell.dataset.todoRow = rowKey;
     if (canEditTodoGlobalStatus()) statusCell.classList.add("todo-commessa-status-clickable");
     statusCell.innerHTML = `<span class="todo-global-pill ${globalStatus.cls}">${globalStatus.label}</span>`;
@@ -8419,7 +11194,19 @@ function renderTodoSection(commesse) {
     });
     bodyTable.appendChild(statusCell);
 
-    colStart = 3;
+    if (showPriorityColumn) {
+      const priorityCell = document.createElement("div");
+      priorityCell.className = "todo-cell todo-priority-cell";
+      priorityCell.style.gridRow = String(rowIndex);
+      priorityCell.style.gridColumn = "4";
+      priorityCell.dataset.todoRow = rowKey;
+      const value = getTodoPriorityDisplay(commessa, priorityField);
+      const isEmpty = value === "n/d";
+      priorityCell.innerHTML = `<span class="todo-priority-value${isEmpty ? " is-empty" : ""}">${value}</span>`;
+      bodyTable.appendChild(priorityCell);
+    }
+
+    colStart = activityStartCol;
     columns.forEach((col) => {
       const status = getTodoStatusFor(commessa.id, col.titolo, col.reparto);
       const isTrackedFlow = isTodoClientFlowTracked(col.titolo, col.reparto);
@@ -8518,6 +11305,33 @@ function renderTodoSection(commesse) {
   updateTodoPanelHeaderOffset();
 }
 
+function formatSectionToolbarTodayLabel(date = new Date()) {
+  const safeDate = date instanceof Date ? date : new Date(date);
+  const dayLabel = safeDate.toLocaleDateString("it-IT", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  const week = getIsoWeekNumber(safeDate);
+  return `${dayLabel} - Week ${week}`;
+}
+
+function updateSectionToolbarDate() {
+  if (!sectionToolbarDate) return;
+  const now = new Date();
+  const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  if (key === sectionToolbarDateKey && sectionToolbarDate.textContent) return;
+  sectionToolbarDate.textContent = formatSectionToolbarTodayLabel(now);
+  sectionToolbarDateKey = key;
+}
+
+function startSectionToolbarDateClock() {
+  updateSectionToolbarDate();
+  if (sectionToolbarDateTimer) return;
+  sectionToolbarDateTimer = window.setInterval(updateSectionToolbarDate, 60 * 1000);
+}
+
 function refreshTodoVisualizationNow() {
   if (!state.session) return;
   if (!todoSection || todoSection.classList.contains("collapsed")) return;
@@ -8579,8 +11393,11 @@ function renderTodoStatusDatePicker() {
     const label = root.querySelector(".todo-status-date-label");
     const daysHost = root.querySelector(".todo-status-date-days");
     if (!label || !daysHost) return;
-    const selected = selectedInput ? startOfDay(selectedInput) : startOfDay(new Date());
-    const month = monthInput ? new Date(monthInput.getFullYear(), monthInput.getMonth(), 1) : new Date(selected.getFullYear(), selected.getMonth(), 1);
+    const selected = selectedInput ? startOfDay(selectedInput) : null;
+    const baseDate = selected || startOfDay(new Date());
+    const month = monthInput
+      ? new Date(monthInput.getFullYear(), monthInput.getMonth(), 1)
+      : new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
     label.textContent = month.toLocaleDateString("it-IT", { month: "long", year: "numeric" });
     daysHost.innerHTML = "";
     const firstWeekday = (month.getDay() + 6) % 7;
@@ -8600,7 +11417,7 @@ function renderTodoStatusDatePicker() {
       day.className = "milestone-day";
       if (cursor.getDay() === 0 || cursor.getDay() === 6) day.classList.add("weekend");
       if (cursor.getTime() === today.getTime()) day.classList.add("today");
-      if (cursor.getTime() === selected.getTime()) day.classList.add("selected");
+      if (selected && cursor.getTime() === selected.getTime()) day.classList.add("selected");
       day.dataset.action = "todo_date_pick";
       day.dataset.field = field;
       day.dataset.date = formatIsoDateOnly(cursor);
@@ -8654,6 +11471,17 @@ function renderTodoStatusDatePicker() {
       : isSilenceDecision
       ? "Conferma silenzio assenso"
       : "Conferma data";
+    const telaioCommessa =
+      isTelaioOrdered && todoMenuTarget?.commessaId
+        ? (state.commesse || []).find((c) => String(c.id) === String(todoMenuTarget.commessaId)) || null
+        : null;
+    const telaioIsAlreadyOrdered =
+      isTelaioOrdered &&
+      Boolean(telaioCommessa?.telaio_consegnato) &&
+      Boolean(getTodoTelaioOrderedDate(todoMenuTarget?.commessaId));
+    applyBtn.classList.toggle("todo-order-confirm-glow", isTelaioOrdered && !telaioIsAlreadyOrdered);
+    applyBtn.classList.toggle("is-warning", isTelaioOrdered && !telaioIsAlreadyOrdered);
+    applyBtn.classList.toggle("is-success", isTelaioOrdered && telaioIsAlreadyOrdered);
   }
   if (confirmSubtitle) {
     confirmSubtitle.textContent = isTelaioOrdered ? "Ordine" : "Conferma";
@@ -8678,13 +11506,13 @@ function openTodoStatusDatePicker(action) {
     todoStatusDatePickerState.sentMonth = new Date(sent.getFullYear(), sent.getMonth(), 1);
     todoStatusDatePickerState.dueMonth = new Date(due.getFullYear(), due.getMonth(), 1);
   } else {
-    const confirmed =
-      action === "telaio_ordered"
-        ? getTodoTelaioOrderedDate(todoMenuTarget.commessaId) || now
-        : parseIsoDateOnly(getTodoClientFlow(todoMenuTarget.commessaId, todoMenuTarget.titolo, todoMenuTarget.reparto)?.confirmedAt) ||
-          now;
+    const confirmed = action === "telaio_ordered"
+      ? getTodoTelaioOrderedDate(todoMenuTarget.commessaId) || null
+      : parseIsoDateOnly(getTodoClientFlow(todoMenuTarget.commessaId, todoMenuTarget.titolo, todoMenuTarget.reparto)?.confirmedAt) ||
+        now;
     todoStatusDatePickerState.confirmSelected = confirmed;
-    todoStatusDatePickerState.confirmMonth = new Date(confirmed.getFullYear(), confirmed.getMonth(), 1);
+    const base = confirmed || now;
+    todoStatusDatePickerState.confirmMonth = new Date(base.getFullYear(), base.getMonth(), 1);
   }
   panel.classList.remove("hidden");
   renderTodoStatusDatePicker();
@@ -8760,6 +11588,10 @@ async function handleTodoStatusDatePickerAction(action, button) {
         dueDate: formatIsoDateOnly(due),
       });
       return updated;
+    }
+    if (todoStatusDatePickerState.action === "telaio_ordered" && !todoStatusDatePickerState.confirmSelected) {
+      setStatus("Seleziona una data ordine telaio.", "error");
+      return false;
     }
     const selectedDate = formatIsoDateOnly(todoStatusDatePickerState.confirmSelected || startOfDay(new Date()));
     const updated = await applyTodoStatusAction(todoStatusDatePickerState.action, todoMenuTarget, { selectedDate });
@@ -8872,8 +11704,13 @@ function openTodoStatusMenu(cell, x, y) {
     );
   }
   const telaioActions = [];
+  const telaioOrderedDate = isTelaioOrderTracked ? getTodoTelaioOrderedDate(commessaId) : null;
+  const telaioOrderedOk = Boolean(commessa?.telaio_consegnato) && Boolean(telaioOrderedDate);
+  const telaioOrderedLabel = telaioOrderedOk
+    ? `TELAIO ORDINATO (${formatDateDMY(telaioOrderedDate)})`
+    : "TELAIO: DATA ORDINE...";
   if (canAccessTelaioOrder) {
-    telaioActions.push({ action: "telaio_ordered", label: "TELAIO: DATA ORDINE..." });
+    telaioActions.push({ action: "telaio_ordered", label: telaioOrderedLabel });
   }
   const canShowGoMatrix = currentStatus === "schedulata";
   const getBlockReason = (def) => {
@@ -8951,6 +11788,9 @@ function openTodoStatusMenu(cell, x, y) {
       }
       if (def.action === "client_silence" && clientFlowResolvedStatus === "silenzio_assenso") {
         button.classList.add("is-success");
+      }
+      if (def.action === "telaio_ordered") {
+        button.classList.add(telaioOrderedOk ? "is-success" : "is-warning");
       }
       if (def.iconOnly) {
         button.classList.add("todo-status-btn-icon");
@@ -9157,7 +11997,15 @@ function openTodoGlobalStatusMenu(cell, commessa, x, y) {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.status = label;
-    button.textContent = label.toUpperCase();
+    button.textContent = label;
+    if (label === "Rilasciata a produzione") {
+      const msg = getCommessaReleaseReadinessMessage(commessa);
+      if (msg) {
+        button.classList.add("is-blocked");
+        button.disabled = true;
+        button.title = msg;
+      }
+    }
     if (label === current) {
       button.classList.add("active");
       button.disabled = true;
@@ -9499,7 +12347,9 @@ function applyMatrixActivityStatusPatch(ids, stato) {
       stato,
       reparto: bar.dataset.reparto || "",
     };
+    applyMatrixBarPastClass(bar, fallback);
     applyMatrixBarClientFlowClasses(bar, fallback, bar.dataset.reparto || "");
+    applyMatrixBarTelaioOrderClass(bar, fallback);
   });
 }
 
@@ -9573,11 +12423,134 @@ async function applyTodoStatusAction(action, target, options = {}) {
   return true;
 }
 
+function clampReportGanttRowHeight(value) {
+  const raw = Number.parseInt(String(value ?? ""), 10);
+  const normalized = Number.isFinite(raw) ? raw : REPORT_GANTT_ROW_HEIGHT_DEFAULT;
+  return Math.min(REPORT_GANTT_ROW_HEIGHT_MAX, Math.max(REPORT_GANTT_ROW_HEIGHT_MIN, normalized));
+}
+
+function getReportGanttRowHeight() {
+  if (state.reportGanttRowHeight != null) {
+    return clampReportGanttRowHeight(state.reportGanttRowHeight);
+  }
+  let stored = null;
+  try {
+    stored = localStorage.getItem(REPORT_GANTT_ROW_HEIGHT_STORAGE_KEY);
+  } catch {}
+  const height = clampReportGanttRowHeight(stored);
+  state.reportGanttRowHeight = height;
+  return height;
+}
+
+function persistReportGanttRowHeight(height) {
+  try {
+    localStorage.setItem(REPORT_GANTT_ROW_HEIGHT_STORAGE_KEY, String(height));
+  } catch {}
+}
+
+function applyReportGanttRowHeightToDom(height) {
+  if (!matrixReportGrid) return;
+  const rowHeight = clampReportGanttRowHeight(height);
+  matrixReportGrid.style.setProperty("--report-gantt-row-height", `${rowHeight}px`);
+  const rowTracks = Array.from(matrixReportGrid.querySelectorAll(".report-gantt-row .report-gantt-track"));
+  rowTracks.forEach((track) => {
+    const rawContent = Number.parseFloat(track.dataset.contentHeight || "");
+    const contentHeight = Number.isFinite(rawContent) ? rawContent : 28;
+    track.style.height = `${Math.max(rowHeight, contentHeight)}px`;
+  });
+}
+
+function setReportGanttRowHeight(height, { persist = false } = {}) {
+  const rowHeight = clampReportGanttRowHeight(height);
+  state.reportGanttRowHeight = rowHeight;
+  applyReportGanttRowHeightToDom(rowHeight);
+  if (persist) persistReportGanttRowHeight(rowHeight);
+  return rowHeight;
+}
+
+function stopReportGanttRowResize(pointerId = null) {
+  if (!reportGanttRowResize) return;
+  if (pointerId != null && reportGanttRowResize.pointerId !== pointerId) return;
+  const { handle } = reportGanttRowResize;
+  if (handle) {
+    handle.classList.remove("is-dragging");
+    try {
+      handle.releasePointerCapture?.(reportGanttRowResize.pointerId);
+    } catch {}
+  }
+  document.body.classList.remove("is-report-gantt-row-resizing");
+  const current = clampReportGanttRowHeight(state.reportGanttRowHeight ?? REPORT_GANTT_ROW_HEIGHT_DEFAULT);
+  state.reportGanttRowHeight = current;
+  persistReportGanttRowHeight(current);
+  reportGanttRowResize = null;
+}
+
+function getReportGanttScrollHost() {
+  if (!matrixReportGrid) return null;
+  return matrixReportGrid;
+}
+
+function setupReportGanttRowResizeHandle(handle) {
+  if (!handle) return;
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startHeight = getReportGanttRowHeight();
+    const scrollHost = getReportGanttScrollHost();
+    const hostRect = scrollHost ? scrollHost.getBoundingClientRect() : null;
+    const pointerOffsetInHost = hostRect ? event.clientY - hostRect.top : 0;
+    reportGanttRowResize = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight,
+      handle,
+      scrollHost,
+      startScrollTop: scrollHost ? scrollHost.scrollTop : 0,
+      pointerOffsetInHost,
+    };
+    handle.classList.add("is-dragging");
+    document.body.classList.add("is-report-gantt-row-resizing");
+    handle.setPointerCapture?.(event.pointerId);
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!reportGanttRowResize || reportGanttRowResize.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const dy = event.clientY - reportGanttRowResize.startY;
+    const next = reportGanttRowResize.startHeight + dy;
+    const nextHeight = setReportGanttRowHeight(next, { persist: false });
+    const baseHeight = Math.max(1, reportGanttRowResize.startHeight || REPORT_GANTT_ROW_HEIGHT_DEFAULT);
+    const ratio = nextHeight / baseHeight;
+    const host = reportGanttRowResize.scrollHost;
+    if (host && Number.isFinite(ratio)) {
+      const anchor = (reportGanttRowResize.startScrollTop || 0) + (reportGanttRowResize.pointerOffsetInHost || 0);
+      const nextScrollTop = anchor * ratio - (reportGanttRowResize.pointerOffsetInHost || 0);
+      const maxScrollTop = Math.max(0, host.scrollHeight - host.clientHeight);
+      host.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+    }
+  });
+  handle.addEventListener("pointerup", (event) => {
+    if (!reportGanttRowResize || reportGanttRowResize.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    stopReportGanttRowResize(event.pointerId);
+  });
+  handle.addEventListener("pointercancel", (event) => {
+    if (!reportGanttRowResize || reportGanttRowResize.pointerId !== event.pointerId) return;
+    stopReportGanttRowResize(event.pointerId);
+  });
+  handle.addEventListener("lostpointercapture", () => {
+    if (!reportGanttRowResize) return;
+    stopReportGanttRowResize();
+  });
+}
+
 function renderReportGantt(commesse, today) {
   if (!matrixReportGrid) return;
   matrixReportGrid.classList.remove("report-list");
   matrixReportGrid.classList.add("report-gantt");
   matrixReportGrid.innerHTML = "";
+  const ganttRowHeight = getReportGanttRowHeight();
+  matrixReportGrid.style.setProperty("--report-gantt-row-height", `${ganttRowHeight}px`);
 
   const isDateOk = (d) => d && !Number.isNaN(d.getTime()) && d.getFullYear() >= 2000 && d.getFullYear() <= 2100;
   const getStartDate = (c) => {
@@ -9605,7 +12578,7 @@ function renderReportGantt(commesse, today) {
     return isDateOk(d) ? d : null;
   };
   const getTelaioEffDate = (c) => {
-    const raw = c.data_consegna_telaio_effettiva || "";
+    const raw = c.data_conferma_consegna_telaio || "";
     const d = raw ? new Date(raw) : null;
     return isDateOk(d) ? d : null;
   };
@@ -9659,6 +12632,16 @@ function renderReportGantt(commesse, today) {
     <div class="report-gantt-label">Commessa</div>
     <div class="report-gantt-track"></div>
   `;
+  const headerLabel = header.querySelector(".report-gantt-label");
+  if (headerLabel) {
+    const headerResizeHandle = document.createElement("button");
+    headerResizeHandle.type = "button";
+    headerResizeHandle.className = "report-gantt-label-resize";
+    headerResizeHandle.title = "Trascina su/giu per aumentare o ridurre l'altezza delle righe";
+    headerResizeHandle.setAttribute("aria-label", "Ridimensiona altezza righe gantt");
+    headerLabel.appendChild(headerResizeHandle);
+    setupReportGanttRowResizeHandle(headerResizeHandle);
+  }
   matrixReportGrid.appendChild(header);
 
   const trackHeader = header.querySelector(".report-gantt-track");
@@ -9764,11 +12747,19 @@ function renderReportGantt(commesse, today) {
         selectCommessa(c.id, { openModal: true });
       });
     }
+    const rowResizeHandle = document.createElement("button");
+    rowResizeHandle.type = "button";
+    rowResizeHandle.className = "report-gantt-label-resize";
+    rowResizeHandle.title = "Trascina su/giu per aumentare o ridurre l'altezza delle righe";
+    rowResizeHandle.setAttribute("aria-label", "Ridimensiona altezza righe gantt");
+    label.appendChild(rowResizeHandle);
+    setupReportGanttRowResizeHandle(rowResizeHandle);
     const track = document.createElement("div");
     track.className = "report-gantt-track report-gantt-track-pan";
     track.dataset.rangeStart = formatDateLocal(rangeStart);
     track.dataset.totalDays = String(totalDays);
     track.dataset.commessaId = String(c.id);
+    track.dataset.contentHeight = "28";
     track.style.setProperty("--day-step", `${100 / totalDays}%`);
     const trackContent = document.createElement("div");
     trackContent.className = "report-gantt-track-content";
@@ -9848,7 +12839,7 @@ function renderReportGantt(commesse, today) {
         milestone.style.left = `${ordineLeft}%`;
         milestone.textContent = "T";
         milestone.title = highlightPlannedOnTarget
-          ? `Ordine telaio (stimato): ${formatDateDMY(ordineDay)}`
+          ? `Ordine telaio (pianificato): ${formatDateDMY(ordineDay)}`
           : `Ordine telaio (target): ${formatDateDMY(ordineDay)}${markTargetDelivered ? " \u2022 consegnato" : ""}`;
         milestone.dataset.commessaId = String(c.id);
         milestone.dataset.field = "ordine";
@@ -9898,7 +12889,7 @@ function renderReportGantt(commesse, today) {
           effMarker.classList.add("is-telaio-on-time");
         }
         if (telaioConsegnato) effMarker.classList.add("is-telaio-delivered");
-        effMarker.title = `Ordine telaio (stimato): ${formatDateDMY(ordinePianificatoDay)}${
+        effMarker.title = `Ordine telaio (pianificato): ${formatDateDMY(ordinePianificatoDay)}${
           telaioConsegnato ? " \u2022 ordinato" : ""
         }`;
         effMarker.dataset.commessaId = String(c.id);
@@ -9955,7 +12946,7 @@ function renderReportGantt(commesse, today) {
         kitMarker.type = "button";
         kitMarker.className = "report-gantt-milestone is-kit-cavi";
         kitMarker.style.left = `${kitLeft}%`;
-        kitMarker.textContent = "\uD83D\uDD0C";
+        kitMarker.innerHTML = '<span class="report-gantt-kit-glyph" aria-hidden="true">\uD83D\uDD0C</span>';
         kitMarker.title = `Arrivo kit cavi: ${formatDateDMY(kitCaviDay)}`;
         kitMarker.dataset.commessaId = String(c.id);
         kitMarker.dataset.field = "kit_cavi";
@@ -10125,7 +13116,7 @@ function renderReportGantt(commesse, today) {
         ];
         const laneHeight = 12;
         const barHeight = 8;
-        const topPadding = 4;
+        const lanesBottomBase = 14;
         let laneIndex = 0;
         deptOrder.forEach((dept) => {
           const range = deptRanges.get(dept.key);
@@ -10137,7 +13128,7 @@ function renderReportGantt(commesse, today) {
           bar.className = `report-gantt-activity ${dept.cls}`;
           bar.style.left = `${left}%`;
           bar.style.width = `${width}%`;
-          bar.style.top = `${topPadding + laneIndex * laneHeight}px`;
+          bar.style.bottom = `${lanesBottomBase + laneIndex * laneHeight}px`;
           bar.style.height = `${barHeight}px`;
           bar.title = `${dept.label}: ${formatDateDMY(range.start)} \u2192 ${formatDateDMY(range.end)}`;
           bar.addEventListener("click", (e) => {
@@ -10147,10 +13138,14 @@ function renderReportGantt(commesse, today) {
           trackContent.appendChild(bar);
           laneIndex += 1;
         });
-        const neededHeight = Math.max(28, topPadding + laneIndex * laneHeight + 10);
-        track.style.height = `${neededHeight}px`;
+        const neededHeight = Math.max(28, lanesBottomBase + laneIndex * laneHeight + barHeight + 8);
+        track.dataset.contentHeight = String(neededHeight);
       }
     }
+
+    const contentHeightRaw = Number.parseFloat(track.dataset.contentHeight || "");
+    const contentHeight = Number.isFinite(contentHeightRaw) ? contentHeightRaw : 28;
+    track.style.height = `${Math.max(ganttRowHeight, contentHeight)}px`;
 
     row.appendChild(label);
     row.appendChild(trackWrap);
@@ -10271,6 +13266,7 @@ function setupReportPanZoom(track, headerContent, { rangeStart, rangeDays, bound
       rect,
       boundsStart,
       boundsEnd,
+      anchorRatio: Math.min(1, Math.max(0, (e.clientX - rect.left) / Math.max(1, rect.width))),
       moved: false,
       mode: null,
     };
@@ -10287,16 +13283,17 @@ function setupReportPanZoom(track, headerContent, { rangeStart, rangeDays, bound
       else if (Math.abs(dx) > 3) reportPanZoom.mode = "pan";
     }
     const daysPerPx = reportPanZoom.baseDays / Math.max(1, reportPanZoom.rect.width);
-    const shiftDays = reportPanZoom.mode === "pan" ? Math.round(-dx * daysPerPx) : 0;
-    const zoomSteps = reportPanZoom.mode === "zoom" ? Math.round(dy / 18) : 0;
-    let newDays = reportPanZoom.baseDays + zoomSteps * 8;
+    const shiftDaysFloat = reportPanZoom.mode === "pan" ? -dx * daysPerPx : 0;
+    const zoomStepsFloat = reportPanZoom.mode === "zoom" ? dy / 18 : 0;
+    let newDays = reportPanZoom.baseDays + zoomStepsFloat * 8;
     newDays = Math.min(REPORT_MAX_DAYS, Math.max(REPORT_MIN_DAYS, newDays));
-    const center = addBusinessDays(reportPanZoom.baseStart, Math.round(reportPanZoom.baseDays / 2));
-    let newStart = addBusinessDays(center, -Math.round(newDays / 2));
-    newStart = addBusinessDays(newStart, shiftDays);
-    reportPanZoom.previewStart = normalizeBusinessDay(startOfDay(newStart), 1);
+    const anchorRatio = Number.isFinite(reportPanZoom.anchorRatio) ? reportPanZoom.anchorRatio : 0.5;
+    const oldAnchorOffset = anchorRatio * Math.max(0, reportPanZoom.baseDays - 1);
+    const newAnchorOffset = anchorRatio * Math.max(0, newDays - 1);
+    const newStartOffset = oldAnchorOffset - newAnchorOffset + shiftDaysFloat;
+    reportPanZoom.previewStartOffset = newStartOffset;
     reportPanZoom.previewDays = newDays;
-    applyReportHeaderPreview(reportPanZoom, reportPanZoom.previewStart, reportPanZoom.previewDays);
+    applyReportHeaderPreview(reportPanZoom, reportPanZoom.previewStartOffset, reportPanZoom.previewDays);
   };
   track.onpointerup = (e) => {
     if (!reportPanZoom) return;
@@ -10306,9 +13303,11 @@ function setupReportPanZoom(track, headerContent, { rangeStart, rangeDays, bound
     clearReportPreview(drag);
     reportPanZoom = null;
     if (!drag.moved) return;
-    if (drag.previewStart) {
-      let nextStart = drag.previewStart;
-      let nextDays = drag.previewDays || drag.baseDays;
+    if (Number.isFinite(drag.previewStartOffset) || Number.isFinite(drag.previewDays)) {
+      const startOffset = Number.isFinite(drag.previewStartOffset) ? drag.previewStartOffset : 0;
+      let nextDays = Math.round(drag.previewDays || drag.baseDays);
+      nextDays = Math.min(REPORT_MAX_DAYS, Math.max(REPORT_MIN_DAYS, nextDays));
+      let nextStart = addBusinessDays(drag.baseStart, Math.round(startOffset));
       if (nextStart > drag.boundsEnd) {
         nextStart = startOfWeek(addDays(drag.boundsEnd, -7));
       }
@@ -10329,13 +13328,13 @@ function setupReportPanZoom(track, headerContent, { rangeStart, rangeDays, bound
   };
 }
 
-function applyReportHeaderPreview(drag, previewStart, previewDays) {
-  if (!drag || !drag.previewTargets || !previewStart || !previewDays) return;
+function applyReportHeaderPreview(drag, previewStartOffset, previewDays) {
+  if (!drag || !drag.previewTargets || !Number.isFinite(previewDays)) return;
   const baseDays = drag.baseDays;
   const width = Math.max(1, drag.rect.width);
-  const shiftDays = businessDayDiff(drag.baseStart, previewStart);
-  const scale = baseDays / previewDays;
-  const shiftPx = -scale * (shiftDays / baseDays) * width;
+  const shiftDays = Number.isFinite(previewStartOffset) ? previewStartOffset : 0;
+  const scale = baseDays / Math.max(1, previewDays);
+  const shiftPx = -scale * (shiftDays / Math.max(1, baseDays)) * width;
   drag.previewTargets.forEach((target) => {
     target.style.transformOrigin = "left center";
     target.style.transform = `translateX(${shiftPx}px) scaleX(${scale})`;
@@ -10356,9 +13355,21 @@ function clearReportPreview(drag) {
   });
 }
 
-async function loadMatrixAttivita() {
+async function loadMatrixAttivita(options = {}) {
   if (!state.session) return;
   debugLog("loadMatrixAttivita query");
+  const deferRender = Boolean(options?.deferRender) || matrixBootstrapSyncInProgress;
+  if (matrixState.customWeeks != null) {
+    const parsedWeeks = Number(matrixState.customWeeks);
+    if (Number.isFinite(parsedWeeks) && parsedWeeks > 0) {
+      matrixState.customWeeks = clampMatrixWeeks(parsedWeeks);
+    } else {
+      matrixState.customWeeks = null;
+    }
+  }
+  const rawDate = matrixState.date ? new Date(matrixState.date) : new Date();
+  matrixState.date = Number.isNaN(rawDate.getTime()) ? new Date() : rawDate;
+  if (matrixDate) matrixDate.value = formatDateInput(matrixState.date);
   const { start, end } = getMatrixRange();
   let data = null;
   let error = null;
@@ -10396,8 +13407,11 @@ async function loadMatrixAttivita() {
   } else {
     matrixState.attivita = data || [];
   }
-  renderMatrix();
-  renderMatrixReport();
+  if (!deferRender) {
+    scheduleMatrixRenderStabilized();
+  }
+  removeMatrixDragFollower();
+  restoreMatrixDragSourceVisual();
 }
 
 async function loadAttivita() {
@@ -10525,11 +13539,34 @@ function renderCalendar(start, end) {
   });
 }
 
-async function refreshTodoRealtimeSnapshot() {
+function buildTodoRealtimeSnapshotBase(targetCommessaIds = null) {
+  if (Array.isArray(targetCommessaIds) && targetCommessaIds.length) {
+    const ids = Array.from(
+      new Set(
+        targetCommessaIds
+          .map((id) => String(id || "").trim())
+          .filter(Boolean)
+      )
+    );
+    if (!ids.length) return [];
+    const byId = new Map();
+    const register = (commessa) => {
+      if (!commessa || !commessa.id) return;
+      byId.set(String(commessa.id), commessa);
+    };
+    (state.commesse || []).forEach(register);
+    (state.reportFilteredCommesse || []).forEach(register);
+    (todoLastRendered || []).forEach(register);
+    return ids.slice(0, REPORT_MAX_ITEMS).map((id) => byId.get(id) || { id });
+  }
+  const source = todoLastRendered && todoLastRendered.length ? todoLastRendered : (state.commesse || []);
+  return source.slice(0, REPORT_MAX_ITEMS);
+}
+
+async function refreshTodoRealtimeSnapshot(targetCommessaIds = null) {
   if (!state.session) return;
-  const base =
-    todoLastRendered && todoLastRendered.length ? todoLastRendered : (state.commesse || []).slice(0, REPORT_MAX_ITEMS);
-  if (!base.length || base.length > REPORT_MAX_ITEMS) return;
+  const base = buildTodoRealtimeSnapshotBase(targetCommessaIds);
+  if (!base.length) return;
   await loadReportActivitiesFor(base);
   await loadTodoOverridesFor(base);
   await loadTodoClientFlowsFor(base);
@@ -10586,6 +13623,19 @@ async function saveCommessa(closeOnSuccess = true) {
     const telaioEffettivo =
       d.data_consegna_telaio_effettiva ? d.data_consegna_telaio_effettiva.value || null : null;
     const telaioConsegnato = Boolean(d.telaio_ordinato?.dataset.ordered === "true");
+    const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+    const machineType = normalizeMachineTypeValue(
+      d.tipo_macchina?.value || state.selected?.tipo_macchina || ""
+    );
+    const machineVariant = sanitizeMachineVariantForType(
+      machineType,
+      d.variante_macchina?.value || state.selected?.variante_macchina || "standard"
+    );
+    if (role !== "planner" && !machineType) {
+      setStatus("Tipo macchina obbligatorio.", "error");
+      if (d.tipo_macchina) d.tipo_macchina.focus();
+      return;
+    }
     if (telaioConsegnato && !telaioEffettivo) {
       if (d.data_consegna_telaio_effettiva) {
         d.data_consegna_telaio_effettiva.classList.add("is-missing-required");
@@ -10597,6 +13647,17 @@ async function saveCommessa(closeOnSuccess = true) {
       showToast(msg, "error");
       return;
     }
+    if (d.stato.value === TODO_GLOBAL_RELEASE_DB_STATUS) {
+      const msg = getCommessaReleaseReadinessMessage(state.selected, {
+        telaioOrdered: telaioConsegnato,
+        telaioOrderedDate: telaioEffettivo,
+      });
+      if (msg) {
+        setStatus(msg, "error");
+        showToast(msg, "error");
+        return;
+      }
+    }
     const consegnaValue = d.data_consegna.value || null;
     const payload = {
       codice: normalized.codice,
@@ -10604,10 +13665,15 @@ async function saveCommessa(closeOnSuccess = true) {
       numero: normalized.numero,
       titolo: d.titolo.value.trim() || null,
       cliente: d.cliente.value.trim() || null,
+      tipo_macchina: machineType || "Altro tipo",
+      variante_macchina: machineVariant,
       stato: d.stato.value,
       priorita: d.priorita.value || null,
       data_ingresso: d.data_ingresso.value || null,
       data_ordine_telaio: d.data_ordine_telaio ? d.data_ordine_telaio.value || null : null,
+      data_conferma_consegna_telaio: d.data_conferma_consegna_telaio
+        ? d.data_conferma_consegna_telaio.value || null
+        : null,
       data_arrivo_kit_cavi: d.data_arrivo_kit_cavi ? d.data_arrivo_kit_cavi.value || null : null,
       data_prelievo: d.data_prelievo_materiali ? d.data_prelievo_materiali.value || null : null,
       telaio_consegnato: telaioConsegnato,
@@ -10616,7 +13682,6 @@ async function saveCommessa(closeOnSuccess = true) {
       data_consegna_macchina: consegnaValue,
       note_generali: d.note.value.trim() || null,
     };
-    const role = String(state.profile?.ruolo || "").trim().toLowerCase();
     if (role === "planner") {
       const plannerPayload = {
         data_ordine_telaio: payload.data_ordine_telaio || null,
@@ -10634,10 +13699,15 @@ async function saveCommessa(closeOnSuccess = true) {
     } else {
       const { error } = await supabase.from("commesse").update(payload).eq("id", state.selected.id);
       if (error) {
-        setStatus(`Update error: ${error.message}`, "error");
+        const msg = formatDbErrorMessage(error);
+        setStatus(`Update error: ${msg}`, "error");
+        showToast(msg, "error");
         return;
       }
       updateCommessaInState(state.selected.id, payload);
+      if (Object.prototype.hasOwnProperty.call(payload, "data_conferma_consegna_telaio")) {
+        await warnTelaioPlannedMismatch(state.selected.id, payload.data_conferma_consegna_telaio);
+      }
     }
     applyFilters();
     renderMatrixReport();
@@ -10682,11 +13752,40 @@ async function handleCreate(e) {
     setStatus("Number already exists for this year.", "error");
     return;
   }
+  const role = String(state.profile?.ruolo || "").trim().toLowerCase();
+  const machineType = normalizeMachineTypeValue(n.tipo_macchina?.value || "");
+  const machineVariant = sanitizeMachineVariantForType(
+    machineType,
+    n.variante_macchina?.value || "standard"
+  );
+  if (!machineType) {
+    setStatus("Seleziona una tipologia macchina.", "error");
+    if (n.tipo_macchina) n.tipo_macchina.focus();
+    return;
+  }
+  const plannerTriedTelaioOrdered =
+    role === "planner" &&
+    (Boolean(n.telaio_consegnato?.checked) ||
+      Boolean((n.data_consegna_telaio_effettiva ? n.data_consegna_telaio_effettiva.value : "").trim()));
+  if (plannerTriedTelaioOrdered) {
+    const msg = "Planner: in creazione non puoi impostare Stato telaio e Data telaio ordinato.";
+    setStatus(msg, "error");
+    showToast(msg, "error");
+    if (n.data_consegna_telaio_effettiva) n.data_consegna_telaio_effettiva.focus();
+    return;
+  }
   const telaioEffettivo =
     n.data_consegna_telaio_effettiva ? n.data_consegna_telaio_effettiva.value || null : null;
   const telaioConsegnato = Boolean(n.telaio_consegnato?.checked);
   if (telaioConsegnato && !telaioEffettivo) {
     setStatus("Set a planned frame order date before marking as ordered.", "error");
+    return;
+  }
+  if (n.stato.value === TODO_GLOBAL_RELEASE_DB_STATUS) {
+    setStatus(
+      'In creazione non puoi impostare "Rilasciata a produzione": servono Telaio ordinato con data e Progettazione termodinamica DONE.',
+      "error"
+    );
     return;
   }
   const consegnaValue = n.data_consegna.value || null;
@@ -10696,6 +13795,8 @@ async function handleCreate(e) {
     numero: normalized.numero,
     titolo: n.titolo.value.trim(),
     cliente: n.cliente.value.trim() || null,
+    tipo_macchina: machineType,
+    variante_macchina: machineVariant,
     stato: n.stato.value,
     priorita: n.priorita.value || null,
     data_ingresso: n.data_ingresso.value || null,
@@ -10708,10 +13809,16 @@ async function handleCreate(e) {
   };
   const { data, error } = await supabase.from("commesse").insert(payload).select().single();
   if (error) {
-    setStatus(`Create error: ${error.message}`, "error");
+    const msg = formatDbErrorMessage(error);
+    setStatus(`Create error: ${msg}`, "error");
+    showToast(msg, "error");
     return;
   }
   newForm.reset();
+  refreshMachineTypeSelects({
+    newType: "",
+    newVariant: "standard",
+  });
   setStatus("Commessa created.", "ok");
   closeCommessaCreateModal();
   await loadCommesse();
@@ -10742,31 +13849,79 @@ async function handleAddReparto(e) {
 
 async function handleImport() {
   if (!state.canWrite) return;
+  resetImportFeedback();
   const { rows, errors } = parseImportRows(importTextarea.value);
   if (!rows.length) {
-    setStatus("No valid rows to import.", "error");
+    const msg = "No valid rows to import.";
+    setStatus(msg, "error");
+    showImportResult(msg, "error");
     return;
   }
   if (errors.length) {
-    setStatus(`Import blocked: fix the errors (e.g. ${errors[0]}).`, "error");
+    const msg = `Import blocked: fix the errors (e.g. ${errors[0]}).`;
+    setStatus(msg, "error");
+    showImportResult(msg, "error");
     return;
   }
 
-  const { error } = await supabase
-    .from("commesse")
-    .upsert(rows, { onConflict: "codice" })
-    .select("codice");
-
-  if (error) {
-    setStatus(`Import error: ${error.message}`, "error");
-    importPreview.textContent = `Import error: ${error.message}`;
-    console.error("Import error", error);
-    return;
+  if (importCommitBtn) {
+    importCommitBtn.disabled = true;
+    importCommitBtn.textContent = "Import 0%";
   }
-  setStatus(`Import completed: ${rows.length} rows.`, "ok");
-  closeImportModal();
-  importTextarea.value = "";
-  await loadCommesse();
+
+  try {
+    const chunks = chunkArray(rows, IMPORT_CHUNK_SIZE);
+    let imported = 0;
+    updateImportProgress(2, "Preparazione...");
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      const startPct = Math.round((imported / rows.length) * 100);
+      updateImportProgress(startPct, `Blocco ${i + 1}/${chunks.length}`);
+
+      const { error } = await supabase
+        .from("commesse")
+        .upsert(chunk, { onConflict: "codice" })
+        .select("codice");
+
+      if (error) {
+        const msg = `Import error: ${formatDbErrorMessage(error)}`;
+        setStatus(msg, "error");
+        showImportResult(msg, "error");
+        importPreview.textContent = msg;
+        console.error("Import error", error);
+        return;
+      }
+
+      imported += chunk.length;
+      const pct = Math.round((imported / rows.length) * 100);
+      updateImportProgress(pct, `${imported}/${rows.length} righe`);
+      if (importCommitBtn) {
+        importCommitBtn.textContent = `Import ${pct}%`;
+      }
+    }
+
+    updateImportProgress(100, "Completato");
+    const okMsg = `Import completed: ${rows.length} rows.`;
+    setStatus(okMsg, "ok");
+    showImportResult(okMsg, "ok");
+    showToast(okMsg, "ok");
+    await loadCommesse();
+    window.setTimeout(() => {
+      importTextarea.value = "";
+      closeImportModal();
+      updateImportPreview();
+    }, 900);
+  } catch (err) {
+    const msg = `Import error: ${formatDbErrorMessage(err)}`;
+    setStatus(msg, "error");
+    showImportResult(msg, "error");
+  } finally {
+    if (importCommitBtn) {
+      importCommitBtn.disabled = false;
+      importCommitBtn.textContent = "Importa";
+    }
+  }
 }
 
 async function handleAssignConfirm() {
@@ -10823,16 +13978,30 @@ async function handleAssignConfirm() {
     data_fine: endAt.toISOString(),
     stato: "pianificata",
   }));
+  const includesTelaio = selected.some((title) => isTelaioActivityTitle(title));
+
+  if (commessaId && selected.some((title) => isTelaioActivityTitle(title))) {
+    const ok = await confirmTelaioDuplicateAssignment(commessaId);
+    if (!ok) return;
+  }
 
   const { error } = await supabase.from("attivita").insert(rows);
   if (error) {
     setStatus(`Assignment error: ${error.message}`, "error");
     return;
   }
-  setStatus("Activities assigned.", "ok");
+  let telaioPlannedSynced = true;
+  if (includesTelaio) {
+    telaioPlannedSynced = await syncTelaioPlannedDateFromMatrix(commessaId, endAt);
+  }
+  if (!telaioPlannedSynced) {
+    setStatus("Activities assigned, ma data telaio pianificata non aggiornata.", "error");
+  } else {
+    setStatus("Activities assigned.", "ok");
+  }
   closeAssignModal();
   await loadMatrixAttivita();
-  await refreshTodoRealtimeSnapshot();
+  await refreshTodoRealtimeSnapshot([commessaId]);
   } catch (err) {
     setStatus(`Assignment error: ${err.message || err}`, "error");
   } finally {
@@ -10986,13 +14155,17 @@ if (reportNumberFilter) reportNumberFilter.addEventListener("input", renderMatri
 if (reportYearFilter) reportYearFilter.addEventListener("change", renderMatrixReport);
 if (todoDescFilter) todoDescFilter.addEventListener("input", renderMatrixReportFromTodoFilters);
 if (todoNumberFilter) todoNumberFilter.addEventListener("input", renderMatrixReportFromTodoFilters);
+if (todoSyncMatrixFiltersBtn) {
+  updateTodoSyncMatrixFiltersButton();
+  todoSyncMatrixFiltersBtn.addEventListener("click", handleTodoQuickSyncFromMatrixFilters);
+}
 if (todoYearFilter) todoYearFilter.addEventListener("change", renderMatrixReportFromTodoFilters);
 if (todoPriorityField) todoPriorityField.addEventListener("change", renderMatrixReportFromTodoFilters);
 if (todoPriorityBtn) {
   renderTodoPriorityButtonLabel();
   todoPriorityBtn.addEventListener("click", () => {
     const mode = todoPriorityBtn.dataset.mode || "off";
-    const next = mode === "off" ? "asc" : "off";
+    const next = mode === "off" ? "asc" : mode === "asc" ? "desc" : "off";
     todoPriorityBtn.dataset.mode = next;
     renderTodoPriorityButtonLabel();
     renderMatrixReportFromTodoFilters();
@@ -11066,27 +14239,78 @@ detailForm.addEventListener("submit", handleUpdate);
 detailForm.addEventListener("input", updateDetailDirty);
 detailForm.addEventListener("change", updateDetailDirty);
 if (d.telaio_ordinato) {
-  d.telaio_ordinato.addEventListener("click", () => {
+  d.telaio_ordinato.addEventListener("click", async () => {
+    if (!canEditTelaioOrderByRole()) {
+      const msg = "Solo admin e responsabile possono modificare lo stato ordine telaio.";
+      setStatus(msg, "error");
+      showToast(msg, "error");
+      return;
+    }
     const isOrdered = d.telaio_ordinato.dataset.ordered === "true";
     const plannedDate = d.data_consegna_telaio_effettiva ? d.data_consegna_telaio_effettiva.value || "" : "";
+    if (isOrdered) {
+      const confirmed = await openConfirmModal(
+        "Il telaio risulta ORDINATO. Passare a NON ORDINATO e azzerare la data ordine?",
+        null,
+        {
+          okLabel: "Conferma",
+          cancelLabel: "Annulla",
+        }
+      );
+      if (!confirmed) return;
+      if (d.data_consegna_telaio_effettiva) {
+        d.data_consegna_telaio_effettiva.value = "";
+      }
+      setTelaioOrdinatoButton(
+        d.telaio_ordinato,
+        false,
+        true,
+        d.data_consegna_telaio_effettiva || null
+      );
+      updateDetailDirty();
+      return;
+    }
     if (!isOrdered && !plannedDate) {
       if (d.data_consegna_telaio_effettiva) {
         d.data_consegna_telaio_effettiva.classList.add("is-missing-required");
         setTimeout(() => d.data_consegna_telaio_effettiva.classList.remove("is-missing-required"), 1600);
         d.data_consegna_telaio_effettiva.focus();
+        if (typeof d.data_consegna_telaio_effettiva.showPicker === "function") {
+          try {
+            d.data_consegna_telaio_effettiva.showPicker();
+          } catch (_err) {
+            // Ignore unsupported showPicker errors.
+          }
+        }
       }
-      const msg = "Add a planned frame order date before marking as ordered.";
+      const msg = "Seleziona prima una data ordine telaio, poi conferma lo stato ORDINATO.";
       setStatus(msg, "error");
       showToast(msg, "error");
       return;
     }
-    setTelaioOrdinatoButton(
-      d.telaio_ordinato,
-      !isOrdered,
-      true,
-      d.data_consegna_telaio_effettiva || null
+    const plannedDateObj = parseIsoDateOnly(plannedDate);
+    const plannedDateLabel = plannedDateObj ? formatDateDMY(plannedDateObj) : plannedDate;
+    const confirmOrdered = await openConfirmModal(
+      `Confermare TELAIO ORDINATO con data ${plannedDateLabel}?`,
+      null,
+      {
+        okLabel: "Conferma ordine",
+        cancelLabel: "Annulla",
+      }
     );
+    if (!confirmOrdered) return;
+    setTelaioOrdinatoButton(d.telaio_ordinato, true, true, d.data_consegna_telaio_effettiva || null);
     updateDetailDirty();
+  });
+}
+if (d.data_consegna_telaio_effettiva) {
+  d.data_consegna_telaio_effettiva.addEventListener("input", () => {
+    if (!d.telaio_ordinato || d.telaio_ordinato.dataset.ordered !== "true") return;
+    setTelaioOrdinatoButton(d.telaio_ordinato, true, false, d.data_consegna_telaio_effettiva || null);
+  });
+  d.data_consegna_telaio_effettiva.addEventListener("change", () => {
+    if (!d.telaio_ordinato || d.telaio_ordinato.dataset.ordered !== "true") return;
+    setTelaioOrdinatoButton(d.telaio_ordinato, true, false, d.data_consegna_telaio_effettiva || null);
   });
 }
 newForm.addEventListener("submit", handleCreate);
@@ -11102,6 +14326,25 @@ if (d.anno && d.numero) {
   const handler = () => updateNumeroWarning(d.anno, d.numero, detailNumeroWarning, state.selected?.id);
   d.anno.addEventListener("input", handler);
   d.numero.addEventListener("input", handler);
+}
+if (n.tipo_macchina) {
+  n.tipo_macchina.addEventListener("change", () => {
+    setMachineVariantSelectOptions(
+      n.variante_macchina,
+      n.tipo_macchina.value,
+      n.variante_macchina?.value || "standard"
+    );
+  });
+}
+if (d.tipo_macchina) {
+  d.tipo_macchina.addEventListener("change", () => {
+    setMachineVariantSelectOptions(
+      d.variante_macchina,
+      d.tipo_macchina.value,
+      d.variante_macchina?.value || "standard"
+    );
+    updateDetailDirty();
+  });
 }
 if (openNewCommessaBtn) {
   openNewCommessaBtn.addEventListener("click", openCommessaCreateModal);
@@ -11125,13 +14368,15 @@ if (commessaDetailModal) {
     if (e.target === commessaDetailModal) requestCloseCommessaDetailModal();
   });
 }
-if (commesseToggleBtn && commessePanel) {
+if (commessePanel) {
   const toggle = () => {
     commessePanel.classList.toggle("collapsed");
     const isCollapsed = commessePanel.classList.contains("collapsed");
-    commesseToggleBtn.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+    if (commesseToggleBtn) {
+      commesseToggleBtn.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+    }
   };
-  commesseToggleBtn.addEventListener("click", toggle);
+  if (commesseToggleBtn) commesseToggleBtn.addEventListener("click", toggle);
   if (commesseTitle) commesseTitle.addEventListener("click", toggle);
 }
 
@@ -11183,6 +14428,9 @@ if (openProgressBtn) {
 if (openBackupBtn) {
   openBackupBtn.addEventListener("click", openBackupModal);
 }
+if (openNotificationsBtn) {
+  openNotificationsBtn.addEventListener("click", openNotificationsModal);
+}
 if (themeToggleBtn) {
   themeToggleBtn.addEventListener("click", toggleTheme);
 }
@@ -11232,6 +14480,26 @@ if (workloadModal) {
 if (backupModal) {
   backupModal.addEventListener("click", (e) => {
     if (e.target === backupModal) closeBackupModal();
+  });
+}
+if (closeNotificationsBtn) {
+  closeNotificationsBtn.addEventListener("click", closeNotificationsModal);
+}
+if (refreshNotificationsBtn) {
+  refreshNotificationsBtn.addEventListener("click", () => {
+    void refreshNotificationsPanel();
+  });
+}
+if (notificationsOnlyMineBtn) {
+  notificationsOnlyMineBtn.addEventListener("click", () => {
+    notificationsOnlyMine = !notificationsOnlyMine;
+    updateNotificationsOnlyMineButton();
+    renderNotificationsFromCache();
+  });
+}
+if (notificationsModal) {
+  notificationsModal.addEventListener("click", (e) => {
+    if (e.target === notificationsModal) closeNotificationsModal();
   });
 }
 if (progressYearCurrent) {
@@ -11307,6 +14575,21 @@ if (importProductionTextarea) importProductionTextarea.addEventListener("input",
 importCommitBtn.addEventListener("click", handleImport);
 if (importDatesCommitBtn) importDatesCommitBtn.addEventListener("click", handleImportDates);
 if (importProductionCommitBtn) importProductionCommitBtn.addEventListener("click", handleImportProduction);
+if (copyImportHeaderBtn) {
+  copyImportHeaderBtn.addEventListener("click", () => {
+    void handleCopyImportHeader(IMPORT_HEADER_BASE, "Importa da Excel");
+  });
+}
+if (copyImportDatesHeaderBtn) {
+  copyImportDatesHeaderBtn.addEventListener("click", () => {
+    void handleCopyImportHeader(IMPORT_HEADER_DATES, "Importa date commesse");
+  });
+}
+if (copyImportProductionHeaderBtn) {
+  copyImportProductionHeaderBtn.addEventListener("click", () => {
+    void handleCopyImportHeader(IMPORT_HEADER_PRODUCTION, "Importa date produzione");
+  });
+}
 importModal.addEventListener("click", (e) => {
   if (e.target === importModal) closeImportModal();
 });
@@ -11335,6 +14618,7 @@ window.addEventListener("keydown", (e) => {
     closeDeleteCommessaModal();
     closeWorkloadModal();
     closeBackupModal();
+    closeNotificationsModal();
     closeReportDeptMenu();
     closeMilestonePicker();
   }
@@ -11360,25 +14644,30 @@ calNextBtn.addEventListener("click", async () => {
   await loadAttivita();
 });
 matrixDate.addEventListener("change", async (e) => {
+  matrixState.panResidualDays = 0;
   matrixState.date = new Date(e.target.value);
   await loadMatrixAttivita();
 });
 matrixPrevBtn.addEventListener("click", async () => {
+  matrixState.panResidualDays = 0;
   matrixState.date = addDays(matrixState.date, -7);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
 });
 matrixNextBtn.addEventListener("click", async () => {
+  matrixState.panResidualDays = 0;
   matrixState.date = addDays(matrixState.date, 7);
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
 });
 matrixTodayBtn.addEventListener("click", async () => {
+  matrixState.panResidualDays = 0;
   matrixState.date = new Date();
   matrixDate.value = formatDateInput(matrixState.date);
   await loadMatrixAttivita();
 });
 matrixZoomInBtn.addEventListener("click", async () => {
+  if (!MATRIX_ZOOM_BUTTONS_ENABLED) return;
   matrixState.customWeeks = null;
   if (matrixState.view === "six") {
     matrixState.view = "three";
@@ -11389,11 +14678,14 @@ matrixZoomInBtn.addEventListener("click", async () => {
   } else {
     matrixState.view = "week";
   }
+  matrixState.panResidualDays = 0;
   matrixState.date = startOfWeek(matrixState.date);
+  matrixDate.value = formatDateInput(matrixState.date);
   setMatrixViewLabel();
   await loadMatrixAttivita();
 });
 matrixZoomOutBtn.addEventListener("click", async () => {
+  if (!MATRIX_ZOOM_BUTTONS_ENABLED) return;
   matrixState.customWeeks = null;
   if (matrixState.view === "week") {
     matrixState.view = "two";
@@ -11402,7 +14694,9 @@ matrixZoomOutBtn.addEventListener("click", async () => {
   } else if (matrixState.view === "three") {
     matrixState.view = "six";
   }
+  matrixState.panResidualDays = 0;
   matrixState.date = startOfWeek(matrixState.date);
+  matrixDate.value = formatDateInput(matrixState.date);
   setMatrixViewLabel();
   await loadMatrixAttivita();
 });
@@ -11463,6 +14757,8 @@ if (matrixTrash) {
     const attivita = matrixState.attivita.find((x) => String(x.id) === String(dragId));
     if (!canDeleteMatrixActivity(attivita)) return;
     e.preventDefault();
+    updateMatrixDropEffect(e);
+    updateMatrixDragFollowerPosition(e.clientX, e.clientY);
     matrixTrash.classList.add("is-dragover");
   });
   matrixTrash.addEventListener("dragleave", () => {
@@ -11481,16 +14777,44 @@ if (matrixTrash) {
     }
     e.preventDefault();
     e.stopPropagation();
+    markMatrixDragDropHandled();
     matrixTrash.classList.remove("is-dragover");
     if (!dragId) return;
     await deleteActivityById(dragId);
   });
 }
 if (matrixCommessaPickerToggleBtn) {
-  matrixCommessaPickerToggleBtn.addEventListener("click", () => openMatrixFilter("commessa"));
+  matrixCommessaPickerToggleBtn.addEventListener("click", () => {
+    if (isMatrixQuickCommessaFilterActive()) {
+      setStatus('Disattiva il filtro rapido "numero comm." per usare "Filtra commesse".', "error");
+      matrixQuickCommessaFilter?.focus();
+      matrixQuickCommessaFilter?.select?.();
+      return;
+    }
+    openMatrixFilter("commessa");
+  });
+}
+if (matrixCommessaClearBtn) {
+  matrixCommessaClearBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMatrixSelectedCommesse([]);
+    renderMatrix();
+    setStatus("Filtro commesse rimosso.", "ok");
+  });
 }
 if (matrixAttivitaToggleBtn) {
   matrixAttivitaToggleBtn.addEventListener("click", () => openMatrixFilter("attivita"));
+}
+if (matrixAttivitaClearBtn) {
+  matrixAttivitaClearBtn.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    matrixState.selectedAttivita = new Set();
+    updateMatrixAttivitaPickerLabel();
+    await loadMatrixAttivita();
+    setStatus("Filtro attivita rimosso.", "ok");
+  });
 }
 matrixToggleListBtn.addEventListener("click", () => {
   if (!matrixCommessePanel) return;
@@ -11502,6 +14826,12 @@ matrixToggleListBtn.addEventListener("click", () => {
 matrixCommessaSearch.addEventListener("input", renderMatrixCommesseColumn);
 if (matrixCommessaYear) {
   matrixCommessaYear.addEventListener("change", renderMatrixCommesseColumn);
+}
+if (matrixQuickCommessaFilter) {
+  matrixQuickCommessaFilter.addEventListener("input", (event) => {
+    const raw = event?.target?.value ?? "";
+    setMatrixQuickCommessaFilterRaw(raw);
+  });
 }
 assignConfirmBtn.addEventListener("click", handleAssignConfirm);
 closeAssignBtn.addEventListener("click", closeAssignModal);
@@ -11685,12 +15015,21 @@ if (milestoneClearBtn) {
     const field = milestonePickerState.field;
     if (!commessaId || !field) return;
     milestonePickerState.saving = true;
-    const payload = {};
+    let payload = {};
     if (field === "ordine") payload.data_ordine_telaio = null;
     if (field === "kit_cavi") payload.data_arrivo_kit_cavi = null;
     if (field === "prelievo") payload.data_prelievo = null;
     if (field === "consegna") payload.data_consegna_macchina = null;
-    if (field === "ordine_pianificato") payload.data_consegna_telaio_effettiva = null;
+    if (field === "ordine_pianificato") payload.data_conferma_consegna_telaio = null;
+    const consistency = ensureTelaioOrderPayloadConsistency(commessaId, payload, {
+      focusDateField: true,
+      toast: true,
+    });
+    if (!consistency.ok) {
+      milestonePickerState.saving = false;
+      return;
+    }
+    payload = consistency.payload;
     const role = String(state.profile?.ruolo || "").trim().toLowerCase();
     let error = null;
       if (role === "planner" && (field === "ordine" || field === "consegna" || field === "kit_cavi")) {
@@ -11712,22 +15051,22 @@ if (milestoneClearBtn) {
   });
 }
 document.addEventListener("mousemove", (e) => {
-  if (!matrixState.resizing) return;
-  const elements = document.elementsFromPoint(e.clientX, e.clientY);
-  const cell = elements.find((el) => el.classList && el.classList.contains("matrix-cell"));
-  if (!cell || !cell.dataset.day) return;
-  const dayKey = cell.dataset.day;
-  if (dayKey < matrixState.resizing.startDayKey) return;
-  matrixState.resizing.targetDayKey = dayKey;
-  if (matrixState.resizing.previewBar && matrixState.resizing.layerRect && matrixState.resizing.startCellRect) {
-    const endRect = cell.getBoundingClientRect();
-    const left = matrixState.resizing.startCellRect.left - matrixState.resizing.layerRect.left;
-    const maxRight = matrixState.resizing.layerRect.right - matrixState.resizing.layerRect.left;
-    const mouseX = e.clientX - matrixState.resizing.layerRect.left;
+  const ctx = matrixState.resizing;
+  if (!ctx) return;
+  const targetCell = resolveMatrixResizeTargetCell(ctx, e.clientX);
+  if (!targetCell || !targetCell.dataset?.day) return;
+  const dayKey = targetCell.dataset.day;
+  if (dayKey < ctx.startDayKey) return;
+  ctx.targetDayKey = dayKey;
+  setMatrixResizeTargetCell(ctx, targetCell);
+  if (ctx.previewBar && ctx.layerRect && ctx.startCellRect) {
+    const left = ctx.startCellRect.left - ctx.layerRect.left;
+    const maxRight = ctx.layerRect.right - ctx.layerRect.left;
+    const mouseX = e.clientX - ctx.layerRect.left;
     const clampedX = Math.max(left, Math.min(mouseX, maxRight));
     const width = Math.max(0, clampedX - left);
-    matrixState.resizing.previewBar.style.left = `${left}px`;
-    matrixState.resizing.previewBar.style.width = `${width}px`;
+    ctx.previewBar.style.left = `${left}px`;
+    ctx.previewBar.style.width = `${width}px`;
   }
 });
 document.addEventListener("mouseup", () => {
@@ -11740,6 +15079,10 @@ document.addEventListener("mouseup", () => {
 document.addEventListener("dragend", () => {
   if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
   matrixState.draggingId = null;
+  if (!matrixState.dragDropHandled) {
+    removeMatrixDragFollower();
+    restoreMatrixDragSourceVisual();
+  }
   document.querySelectorAll(".matrix-activity-bar.dragging").forEach((el) => el.classList.remove("dragging"));
   closeMatrixQuickMenu();
   if (matrixTrash) matrixTrash.classList.remove("is-dragover");
@@ -11747,29 +15090,93 @@ document.addEventListener("dragend", () => {
 document.addEventListener("drop", () => {
   if (matrixGrid) matrixGrid.classList.remove("matrix-dragging");
   matrixState.draggingId = null;
+  if (!matrixState.dragDropHandled) {
+    removeMatrixDragFollower();
+    restoreMatrixDragSourceVisual();
+  }
   document.querySelectorAll(".matrix-activity-bar.dragging").forEach((el) => el.classList.remove("dragging"));
   closeMatrixQuickMenu();
   if (matrixTrash) matrixTrash.classList.remove("is-dragover");
+});
+document.addEventListener("dragover", (e) => {
+  if (!matrixState.dragFollowerEl) return;
+  updateMatrixDragFollowerPosition(e.clientX, e.clientY);
 });
 sectionLinks.forEach((btn) => {
   btn.addEventListener("click", () => {
     const targetId = btn.dataset.target;
     if (!targetId) return;
-    const target = document.getElementById(targetId);
+    const ensureSectionExpanded = (panelId) => {
+      const panel = document.getElementById(panelId);
+      if (!panel) return null;
+      if (!panel.classList.contains("collapsed")) return panel;
+      panel.classList.remove("collapsed");
+      if (panelId === "commessePanel" && commesseToggleBtn) {
+        commesseToggleBtn.setAttribute("aria-expanded", "true");
+      }
+      if (panelId === "reportPanel" || panelId === "todoSection") {
+        renderMatrixReport();
+      }
+      return panel;
+    };
+    const target = ensureSectionExpanded(targetId);
     if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
-    const top = rect.top + window.scrollY - toolbarOffset - getSectionToolbarGap();
-    window.scrollTo({ top: Math.max(0, top), left: 0, behavior: "smooth" });
+    setActiveSectionLink(targetId);
+    window.requestAnimationFrame(() => {
+      const rect = target.getBoundingClientRect();
+      const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
+      const top = rect.top + window.scrollY - toolbarOffset - getSectionToolbarGap();
+      window.scrollTo({ top: Math.max(0, top), left: 0, behavior: "smooth" });
+    });
   });
 });
+const sectionSpyLinks = sectionLinks.filter((btn) => {
+  const targetId = btn.dataset.target;
+  return Boolean(targetId && document.getElementById(targetId));
+});
+let sectionSpyRafId = 0;
+const setActiveSectionLink = (targetId) => {
+  sectionSpyLinks.forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.target === targetId);
+  });
+};
+const getActiveSectionTargetId = () => {
+  if (!sectionSpyLinks.length) return null;
+  const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
+  const probeY = toolbarOffset + getSectionToolbarGap() + 10;
+  let current = null;
+  let next = null;
+  sectionSpyLinks.forEach((btn) => {
+    const targetId = btn.dataset.target;
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    if (rect.top <= probeY) current = targetId;
+    else if (!next) next = targetId;
+  });
+  return current || next || sectionSpyLinks[sectionSpyLinks.length - 1].dataset.target || null;
+};
+const updateActiveSectionLinkFromScroll = () => {
+  const targetId = getActiveSectionTargetId();
+  if (targetId) setActiveSectionLink(targetId);
+};
+const scheduleSectionSpyUpdate = () => {
+  if (sectionSpyRafId) return;
+  sectionSpyRafId = window.requestAnimationFrame(() => {
+    sectionSpyRafId = 0;
+    updateActiveSectionLinkFromScroll();
+  });
+};
 const updateSectionToolbarOffset = () => {
   const toolbarOffset = sectionToolbar ? sectionToolbar.getBoundingClientRect().height : 0;
   document.documentElement.style.setProperty("--section-toolbar-h", `${toolbarOffset}px`);
   updateTodoPanelHeaderOffset();
+  scheduleSectionSpyUpdate();
 };
 updateSectionToolbarOffset();
+startSectionToolbarDateClock();
 window.addEventListener("resize", updateSectionToolbarOffset);
+window.addEventListener("scroll", scheduleSectionSpyUpdate, { passive: true });
 if (sectionToolbar && typeof ResizeObserver !== "undefined") {
   const toolbarObserver = new ResizeObserver(() => updateSectionToolbarOffset());
   toolbarObserver.observe(sectionToolbar);
@@ -11852,8 +15259,27 @@ if (todoStatusMenu) {
       return;
     }
     if (action.startsWith("todo_date_")) {
+      const prevTarget = todoMenuTarget ? { ...todoMenuTarget } : null;
+      const prevManual = todoStatusMenuManualPosition;
+      const prevLeft = todoStatusMenu?.style.left || "";
+      const prevTop = todoStatusMenu?.style.top || "";
       const shouldClose = await handleTodoStatusDatePickerAction(action, target);
-      if (shouldClose) closeTodoStatusMenu();
+      if (shouldClose) {
+        const targetCell = prevTarget
+          ? findTodoCellByTarget(prevTarget.commessaId, prevTarget.titolo, prevTarget.reparto || "")
+          : null;
+        if (targetCell) {
+          openTodoStatusMenu(targetCell, 0, 0);
+          if (prevManual && todoStatusMenu) {
+            todoStatusMenuManualPosition = true;
+            todoStatusMenu.style.left = prevLeft;
+            todoStatusMenu.style.top = prevTop;
+            positionTodoStatusMenuWithinViewport();
+          }
+        } else {
+          closeTodoStatusMenu();
+        }
+      }
       return;
     }
     if (target.dataset.blocked === "1") {
@@ -11934,6 +15360,7 @@ document.addEventListener("visibilitychange", () => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
+    closeNotificationsModal();
     if (activityModal && !activityModal.classList.contains("hidden")) {
       e.preventDefault();
       closeTodoStatusMenu();
@@ -11987,16 +15414,30 @@ document.addEventListener("click", (e) => {
   if (!matrixGrid || !commessaHighlightId) return;
   const bar = e.target.closest(".matrix-activity-bar");
   if (!bar) {
-    clearCommessaHighlight();
+    clearCommessaHighlight({ preserveViewport: true });
   }
 });
 
 setMatrixColorMode("commessa");
 setMatrixAutoShift(false);
+resetMatrixMovementBaseline();
+applyMatrixMovementControlsState();
 
 supabase.auth.onAuthStateChange(async (event, session) => {
   debugLog(`auth event: ${event} session=${session ? "yes" : "no"}`);
   if (session) {
+    const sameSessionToken =
+      Boolean(session.access_token) &&
+      Boolean(state.session?.access_token) &&
+      session.access_token === state.session.access_token;
+    const sameUser =
+      Boolean(session.user?.id) &&
+      Boolean(state.profile?.id) &&
+      String(session.user.id) === String(state.profile.id);
+    if ((event === "INITIAL_SESSION" || event === "SIGNED_IN") && sameSessionToken && sameUser) {
+      debugLog(`auth event ignored (duplicate ${event})`);
+      return;
+    }
     await syncSignedIn(session);
   } else {
     const hadSession = Boolean(state.session);
@@ -12019,5 +15460,3 @@ const getSectionToolbarGap = () => {
   const value = Number.parseFloat(raw);
   return Number.isFinite(value) ? value : 0;
 };
-
-

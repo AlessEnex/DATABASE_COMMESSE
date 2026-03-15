@@ -12,7 +12,34 @@
     />
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
     <style>
+      :root {
+        --reports-soft-bg: #f7f9fc;
+        --reports-soft-border: rgba(148, 163, 184, 0.45);
+        --reports-soft-ink: #5a6a7f;
+        --reports-ink-soft: #334155;
+        --reports-ink-strong: #1f2937;
+        --reports-divider: rgba(148, 163, 184, 0.24);
+        --reports-highlight-bg: #e8f7ee;
+        --reports-highlight-ink: #1f5c35;
+        --reports-link-hover: #1f4ea3;
+        --reports-hover-bg: #f3f8ff;
+        --reports-active-bg: #e9f2ff;
+      }
+      body.theme-dark {
+        --reports-soft-bg: #19263a;
+        --reports-soft-border: rgba(156, 177, 207, 0.5);
+        --reports-soft-ink: #b7c4d8;
+        --reports-ink-soft: #c8d4e6;
+        --reports-ink-strong: #e9f0fb;
+        --reports-divider: rgba(148, 163, 184, 0.32);
+        --reports-highlight-bg: rgba(34, 197, 94, 0.22);
+        --reports-highlight-ink: #b9efca;
+        --reports-link-hover: #a9c8ff;
+        --reports-hover-bg: rgba(121, 166, 255, 0.14);
+        --reports-active-bg: rgba(121, 166, 255, 0.2);
+      }
       .reports-shell {
         max-width: 1240px;
         margin: 0 auto;
@@ -26,16 +53,58 @@
         justify-content: space-between;
         gap: 8px;
       }
+      .reports-topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
       .reports-title {
         font-size: 20px;
         font-weight: 700;
         letter-spacing: 0.01em;
       }
+      .reports-clock-card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--reports-soft-bg);
+        padding: 8px 10px;
+        display: grid;
+        gap: 2px;
+        min-width: 220px;
+      }
+      .reports-clock-date {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .reports-clock-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: baseline;
+      }
+      .reports-clock-week {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--reports-soft-ink);
+        letter-spacing: 0.04em;
+      }
+      .reports-clock-time {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--reports-ink-strong);
+        line-height: 1.1;
+      }
+      .reports-card > .reports-clock-card {
+        border: none;
+        background: transparent;
+        padding: 0;
+        min-width: 0;
+      }
       .reports-card {
         background: var(--card);
         border: 1px solid var(--border);
         border-radius: 14px;
-        padding: 10px;
+        padding: 12px;
         display: grid;
         gap: 8px;
       }
@@ -71,17 +140,91 @@
         display: grid;
         gap: 8px;
       }
+      .reports-header-guide {
+        display: grid;
+        gap: 6px;
+        padding: 10px 12px;
+        border: 1px solid var(--reports-soft-border);
+        border-radius: 10px;
+        background: var(--reports-soft-bg);
+      }
+      .reports-header-guide-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .reports-header-guide-label {
+        font-size: 12px;
+        color: var(--reports-soft-ink);
+        font-weight: 600;
+      }
+      .reports-copy-header-btn {
+        border: none;
+        background: transparent;
+        color: var(--reports-ink-soft);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 2px 4px;
+      }
+      .reports-copy-header-btn:hover {
+        color: var(--reports-ink-strong);
+      }
+      .reports-header-guide-code {
+        font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        color: var(--reports-ink-soft);
+        background: var(--card);
+        border: 1px dashed var(--reports-soft-border);
+        border-radius: 8px;
+        padding: 6px 8px;
+        user-select: all;
+      }
       .reports-main-layout {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 260px;
         gap: 10px;
         align-items: start;
       }
+      .reports-right-stack {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+        min-width: 0;
+      }
+      .reports-main-stack {
+        display: grid;
+        gap: 10px;
+        min-width: 0;
+      }
       .reports-card-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 6px;
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--reports-divider);
+      }
+      .reports-head-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .reports-head-controls .reports-granularity {
+        padding: 3px;
+      }
+      .reports-head-controls .reports-granularity::before {
+        top: 3px;
+        left: 3px;
+        width: calc((100% - 6px) / 2);
+        height: calc(100% - 6px);
+      }
+      .reports-head-controls .reports-granularity-btn {
+        min-width: 92px;
+        padding: 6px 10px;
+        font-size: 11px;
       }
       .reports-actions {
         display: flex;
@@ -91,6 +234,63 @@
       }
       .reports-actions select {
         min-width: 120px;
+      }
+      .reports-filter-card {
+        display: grid;
+        gap: 8px;
+      }
+      .reports-filter-label {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .reports-filter-label select {
+        width: 100%;
+      }
+      .reports-granularity {
+        position: relative;
+        display: inline-grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0;
+        padding: 4px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--card);
+        --granularity-active-index: 0;
+      }
+      .reports-granularity::before {
+        content: "";
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        width: calc((100% - 8px) / 2);
+        height: calc(100% - 8px);
+        border-radius: 999px;
+        background: var(--reports-highlight-bg);
+        transform: translateX(calc(var(--granularity-active-index) * 100%));
+        transition: transform 180ms ease;
+        pointer-events: none;
+      }
+      .reports-granularity-btn {
+        position: relative;
+        z-index: 1;
+        border: none;
+        background: transparent;
+        border-radius: 999px;
+        min-width: 112px;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--reports-soft-ink);
+        cursor: pointer;
+        transition: transform 120ms ease;
+      }
+      .reports-granularity-btn:hover {
+        transform: scale(1.03);
+      }
+      .reports-granularity-btn.active {
+        color: var(--reports-highlight-ink);
       }
       .reports-refresh-link {
         border: none;
@@ -102,7 +302,7 @@
         text-decoration: underline;
       }
       .reports-refresh-link:hover {
-        color: #1f4ea3;
+        color: var(--reports-link-hover);
       }
       .reports-hint {
         color: var(--muted);
@@ -111,17 +311,7 @@
       .reports-chart-wrap {
         min-height: 320px;
         position: relative;
-      }
-      .reports-data-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(250px, 300px);
-        gap: 8px;
-        align-items: start;
-      }
-      .reports-side-stack {
-        display: grid;
-        gap: 8px;
-        align-content: start;
+        padding-top: 2px;
       }
       #reportsPasteInput {
         min-height: 110px;
@@ -149,11 +339,11 @@
       }
       .reports-week-item:hover {
         border-color: var(--primary);
-        background: #f7fbff;
+        background: var(--reports-hover-bg);
       }
       .reports-week-item.active {
-        border-color: #79a6ff;
-        background: #edf5ff;
+        border-color: var(--primary);
+        background: var(--reports-active-bg);
       }
       .reports-week-detail {
         border: 1px solid var(--border);
@@ -174,6 +364,12 @@
         font-size: 12px;
         color: var(--muted);
       }
+      .reports-period-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+      }
       .reports-kpi-panel {
         border: 1px solid var(--border);
         background: var(--card);
@@ -181,8 +377,7 @@
         padding: 8px;
         display: grid;
         gap: 6px;
-        position: sticky;
-        top: 8px;
+        position: static;
       }
       .reports-kpi-title {
         font-size: 12px;
@@ -211,22 +406,30 @@
           padding: 10px;
         }
         .reports-main-layout {
-          grid-template-columns: minmax(0, 1fr) 240px;
+          grid-template-columns: 1fr;
+        }
+        .reports-right-stack {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
         }
       }
       @media (max-width: 980px) {
         .reports-main-layout {
           grid-template-columns: 1fr;
         }
-        .reports-kpi-panel {
-          position: static;
+        .reports-topbar {
+          flex-direction: column;
+          align-items: flex-start;
         }
-        .reports-data-grid {
+        .reports-right-stack {
           grid-template-columns: 1fr;
         }
         .reports-week-list,
         .reports-week-detail {
           max-height: none;
+        }
+        .reports-period-grid {
+          grid-template-columns: 1fr;
         }
       }
       .reports-gate {
@@ -253,6 +456,9 @@
     <div class="reports-shell">
       <div class="reports-topbar">
         <div class="reports-title">Reports</div>
+        <div class="reports-topbar-actions">
+          <button id="reportsExportPdfBtn" class="primary" type="button">Esporta grafici PDF</button>
+        </div>
       </div>
 
       <details class="reports-card reports-import">
@@ -262,6 +468,13 @@
             Incolla da Excel due colonne: <span class="mono">codice macchina</span> e <span class="mono">imponibile</span>.
             Vengono aggiornati solo i codici macchina gia presenti nelle commesse.
           </p>
+          <div class="reports-header-guide">
+            <div class="reports-header-guide-top">
+              <div class="reports-header-guide-label">Header da incollare in Excel (colonne TAB separate)</div>
+              <button id="reportsCopyHeaderBtn" class="reports-copy-header-btn" type="button">Copia header</button>
+            </div>
+            <div id="reportsHeaderGuideCode" class="reports-header-guide-code">codice macchina	imponibile</div>
+          </div>
           <textarea
             id="reportsPasteInput"
             placeholder="A001	12345,67
@@ -279,49 +492,115 @@ A002	8900"
       </details>
 
       <div class="reports-main-layout">
-        <section class="reports-card">
-          <div class="reports-card-head">
-            <h3>Somma imponibili per settimana (solo telaio ordinato)</h3>
-            <button id="reportsRefreshBtn" class="reports-refresh-link" type="button">Aggiorna grafico</button>
-          </div>
-          <div class="reports-actions">
-            <label>
-              Anno
-              <select id="reportsYearFilter"></select>
-            </label>
-          </div>
-          <div class="reports-data-grid">
-            <div class="reports-chart-wrap">
-              <canvas id="reportsChart"></canvas>
+        <div class="reports-main-stack">
+          <section class="reports-card">
+            <div class="reports-card-head">
+              <h3 id="reportsChartTitle">Somma imponibili per settimana (solo telaio ordinato)</h3>
+              <div class="reports-head-controls">
+                <div>
+                  <div id="reportsGranularity" class="reports-granularity" role="group" aria-label="Granularita grafico">
+                    <button id="reportsGranularityWeek" class="reports-granularity-btn active" type="button" data-mode="week">
+                      Settimanale
+                    </button>
+                    <button id="reportsGranularityDay" class="reports-granularity-btn" type="button" data-mode="day">
+                      Giornaliera
+                    </button>
+                  </div>
+                </div>
+                <button id="reportsRefreshBtn" class="reports-refresh-link" type="button">Aggiorna grafico</button>
+              </div>
             </div>
-            <div class="reports-side-stack">
+          <div class="reports-chart-wrap">
+            <canvas id="reportsChart"></canvas>
+          </div>
+          </section>
+
+          <section class="reports-card">
+            <div class="reports-card-head">
+              <h3>Imponibile entrato per settimana (data ingresso ordine)</h3>
+            </div>
+            <div class="reports-chart-wrap">
+              <canvas id="reportsIngressChart"></canvas>
+            </div>
+          </section>
+
+          <section class="reports-card">
+            <div class="reports-card-head">
+              <h3>Trend ordinato + pianificato (settimana a ∞)</h3>
+            </div>
+            <div class="reports-chart-wrap">
+              <canvas id="reportsFutureTrendChart"></canvas>
+            </div>
+          </section>
+
+          <section class="reports-card">
+            <div class="reports-card-head">
+              <h3>Backlog andamento nel tempo</h3>
+            </div>
+            <div class="reports-chart-wrap">
+              <canvas id="reportsBacklogChart"></canvas>
+            </div>
+            <p class="reports-hint">
+              Interpretazione: se la curva backlog sale, gli ordini in ingresso stanno superando il pianificato; se scende, il
+              pianificato sta recuperando il carico. La linea a 0 indica backlog azzerato.
+            </p>
+          </section>
+
+          <section class="reports-card">
+            <div class="reports-card-head">
+              <h3>Commesse per periodo</h3>
+            </div>
+            <div class="reports-period-grid">
               <ul id="reportsWeekList" class="reports-week-list"></ul>
               <div id="reportsWeekDetail" class="reports-week-detail">
                 <div class="reports-week-detail-title">Clicca una settimana per vedere le commesse incluse.</div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <aside id="reportsKpiPanel" class="reports-kpi-panel">
-          <div class="reports-kpi-title">Indicatori periodo</div>
-          <div class="reports-kpi-row">
-            <div class="reports-kpi-label">Media kEUR / settimana</div>
-            <div id="kpiAvgWeek" class="reports-kpi-value">-</div>
-          </div>
-          <div class="reports-kpi-row">
-            <div class="reports-kpi-label">Macchine (telai ordinati)</div>
-            <div id="kpiMachines" class="reports-kpi-value">-</div>
-          </div>
-          <div class="reports-kpi-row">
-            <div class="reports-kpi-label">Media kEUR / macchina</div>
-            <div id="kpiAvgMachine" class="reports-kpi-value">-</div>
-          </div>
-          <div class="reports-kpi-row">
-            <div class="reports-kpi-label">Totale periodo</div>
-            <div id="kpiTotalEuro" class="reports-kpi-value">-</div>
-          </div>
-        </aside>
+        </div>
+
+        <div class="reports-right-stack">
+          <section class="reports-card reports-filter-card">
+            <div class="reports-card-head">
+              <h3>Filtro anno</h3>
+            </div>
+            <label class="reports-filter-label">
+              Anno report
+              <select id="reportsYearFilter"></select>
+            </label>
+          </section>
+
+          <section class="reports-card">
+            <div class="reports-clock-card" aria-label="Data e ora correnti">
+              <div id="reportsClockDate" class="reports-clock-date">--</div>
+              <div class="reports-clock-meta">
+                <div id="reportsClockWeek" class="reports-clock-week">W--</div>
+                <div id="reportsClockTime" class="reports-clock-time">--:--:--</div>
+              </div>
+            </div>
+          </section>
+
+          <aside id="reportsKpiPanel" class="reports-kpi-panel">
+            <div class="reports-kpi-title">Indicatori periodo</div>
+            <div class="reports-kpi-row">
+              <div id="kpiAvgPeriodLabel" class="reports-kpi-label">Media kEUR / settimana</div>
+              <div id="kpiAvgWeek" class="reports-kpi-value">-</div>
+            </div>
+            <div class="reports-kpi-row">
+              <div class="reports-kpi-label">Macchine (telai ordinati)</div>
+              <div id="kpiMachines" class="reports-kpi-value">-</div>
+            </div>
+            <div class="reports-kpi-row">
+              <div class="reports-kpi-label">Media kEUR / macchina</div>
+              <div id="kpiAvgMachine" class="reports-kpi-value">-</div>
+            </div>
+            <div class="reports-kpi-row">
+              <div class="reports-kpi-label">Totale periodo</div>
+              <div id="kpiTotalEuro" class="reports-kpi-value">-</div>
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
 

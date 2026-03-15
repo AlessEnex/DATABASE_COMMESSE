@@ -16,7 +16,6 @@
     <div class="app">
       <header class="topbar">
         <div class="brand">
-          <div class="logo">CL</div>
           <div>
             <div class="title">Commesse Live</div>
             <div class="subtitle">Database commesse in tempo reale</div>
@@ -72,28 +71,29 @@
       <nav id="sectionToolbar" class="section-toolbar">
         <button class="ghost section-link" type="button" data-target="commessePanel">Commesse</button>
         <button class="ghost section-link" type="button" data-target="matrixPanel">Matrice risorse</button>
-        <button class="ghost section-link" type="button" data-target="calendarPanel">Calendario attivit&agrave;</button>
-        <button class="ghost section-link" type="button" data-target="reportPanel">Pianificazione</button>
         <button class="ghost section-link" type="button" data-target="todoSection">To Dos</button>
+        <button class="ghost section-link" type="button" data-target="reportPanel">Pianificazione</button>
+        <button class="ghost section-link" type="button" data-target="calendarPanel">Calendario</button>
+        <div id="sectionToolbarDate" class="section-toolbar-date mono" aria-live="polite"></div>
+        <button id="openNotificationsBtn" class="ghost section-link section-link-notifications" type="button">
+          Controlla notifiche
+        </button>
       </nav>
 
-      <section class="status-bar hidden"></section>
+      <section id="alarmsSection" class="status-bar hidden" aria-live="polite">
+        <div class="status-bar-head">
+          <span id="alarmsTitle" class="status-bar-title">Allarmi</span>
+        </div>
+        <div id="alarmsList" class="status-bar-list"></div>
+      </section>
 
       <main class="layout">
         <section id="commessePanel" class="panel collapsed">
           <div class="panel-header">
             <div class="panel-header-left">
-              <button
-                id="commesseToggleBtn"
-                class="ghost icon-btn"
-                type="button"
-                title="Comprimi o espandi"
-                aria-label="Comprimi o espandi"
-              >
-                v
-              </button>
               <h2 id="commesseTitle">Commesse</h2>
               <div class="panel-actions">
+                <div id="commesseSeqAlert" class="commesse-seq-alert hidden" aria-live="polite"></div>
                 <button
                   id="openNewCommessaBtn"
                   class="ghost new-btn"
@@ -163,8 +163,36 @@
                     <button id="matrixCommessaPickerToggleBtn" class="ghost matrix-flat-btn" type="button">
                       Filtra commesse
                     </button>
+                    <button
+                      id="matrixCommessaClearBtn"
+                      class="ghost matrix-flat-btn matrix-filter-clear-btn hidden"
+                      type="button"
+                      aria-label="Rimuovi filtro commesse"
+                      title="Rimuovi filtro commesse"
+                    >
+                      ×
+                    </button>
                   </div>
                   <div id="matrixCommessaPickerList" class="matrix-attivita-list hidden"></div>
+                </div>
+              </div>
+              <div class="matrix-control">
+                <div id="matrixQuickCommessaWrap" class="matrix-quick-commessa-wrap">
+                  <span class="matrix-quick-commessa-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false">
+                      <circle cx="11" cy="11" r="7"></circle>
+                      <path d="M16.5 16.5L21 21"></path>
+                    </svg>
+                  </span>
+                  <input
+                    id="matrixQuickCommessaFilter"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="numero comm."
+                    aria-label="Filtro rapido numero commessa"
+                  />
                 </div>
               </div>
               <div class="matrix-control">
@@ -189,6 +217,15 @@
                   <div class="matrix-attivita-field">
                     <button id="matrixAttivitaToggleBtn" class="ghost matrix-flat-btn" type="button">
                       Filtra attivita
+                    </button>
+                    <button
+                      id="matrixAttivitaClearBtn"
+                      class="ghost matrix-flat-btn matrix-filter-clear-btn hidden"
+                      type="button"
+                      aria-label="Rimuovi filtro attivita"
+                      title="Rimuovi filtro attivita"
+                    >
+                      ×
                     </button>
                   </div>
                   <div id="matrixAttivitaList" class="matrix-attivita-list hidden"></div>
@@ -256,22 +293,60 @@
           </div>
         </section>
 
-        <section id="calendarPanel" class="panel calendar-panel collapsed">
+        <section id="todoSection" class="panel todo-panel">
           <div class="panel-header">
-            <h2 id="calendarTitle">Calendario attivita</h2>
-            <div class="calendar-controls">
-              <button id="calPrevBtn" class="ghost" type="button"></button>
-              <input id="calendarDate" type="date" />
-              <button id="calNextBtn" class="ghost" type="button"></button>
-              <select id="calendarView">
-                <option value="week">Settimana</option>
-                <option value="day">Giorno</option>
-              </select>
-            </div>
+            <h2 id="todoTitle">To Dos</h2>
           </div>
-          <div id="calendarGrid" class="calendar-grid"></div>
+          <div class="panel-body">
+            <div class="todo-header">
+              <div class="todo-filters">
+                <input id="todoDescFilter" type="text" placeholder="Descrizione" />
+                <div class="todo-number-sync-wrap">
+                  <input id="todoNumberFilter" type="number" min="1" step="1" placeholder="Numero" />
+                  <button
+                    id="todoSyncMatrixFiltersBtn"
+                    class="ghost todo-filter-sync-btn"
+                    type="button"
+                    title="Quick fill: copia i filtri commessa attivi dalla Matrice risorse (clicca ancora per disattivare)"
+                    aria-label="Quick fill filtri To Dos dalla Matrice risorse"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <circle cx="10.5" cy="10.5" r="5.5"></circle>
+                      <line x1="14.6" y1="14.6" x2="20.2" y2="20.2"></line>
+                      <path d="M17.7 3.2l.8 1.8 1.8.8-1.8.8-.8 1.8-.8-1.8-1.8-.8 1.8-.8z"></path>
+                    </svg>
+                    <span class="todo-filter-sync-tooltip">
+                      Copia i filtri commessa attivi dalla Matrice risorse e li applica ai To Dos.
+                    </span>
+                  </button>
+                </div>
+                <select id="todoYearFilter">
+                  <option value="">Tutti gli anni</option>
+                </select>
+                <select id="todoPriorityField">
+                  <option value="">Priorit&agrave; date: nessuna</option>
+                  <option value="telaio_target">Telaio target</option>
+                  <option value="telaio_stimato">Telaio pianificato</option>
+                  <option value="prelievo">Prelievo</option>
+                  <option value="kit_cavi">Kit cavi</option>
+                  <option value="consegna">Consegna</option>
+                </select>
+                <button id="todoPriorityBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
+                  Priorit&agrave;: OFF
+                </button>
+                <button id="todoSortBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
+                  Ordine numero: OFF
+                </button>
+                <button id="todoCompleteBtn" class="ghost todo-toggle-btn active" type="button">
+                  Complete: nascoste
+                </button>
+              </div>
+              <span id="todoInfoText" class="todo-sub">Click o long press su una pill per cambiare stato.</span>
+              <div id="todoHeaderTableHost" class="todo-header-table-host"></div>
+            </div>
+            <div id="todoGrid" class="todo-grid"></div>
+          </div>
         </section>
-
         <section id="reportPanel" class="panel report-panel">
           <div class="panel-header">
             <h2 id="reportTitle">Pianificazione</h2>
@@ -294,43 +369,41 @@
           </div>
           <div id="matrixReportGrid" class="report-grid"></div>
         </section>
-        <section id="todoSection" class="panel todo-panel">
+
+        <section id="calendarPanel" class="panel calendar-panel collapsed">
           <div class="panel-header">
-            <h2 id="todoTitle">To Dos</h2>
-          </div>
-          <div class="panel-body">
-            <div class="todo-header">
-              <div class="todo-filters">
-                <input id="todoDescFilter" type="text" placeholder="Descrizione" />
-                <input id="todoNumberFilter" type="number" min="1" step="1" placeholder="Numero" />
-                <select id="todoYearFilter">
-                  <option value="">Tutti gli anni</option>
-                </select>
-                <select id="todoPriorityField">
-                  <option value="">Priorit&agrave; date: nessuna</option>
-                  <option value="telaio_target">Telaio target</option>
-                  <option value="telaio_stimato">Telaio stimato</option>
-                  <option value="prelievo">Prelievo</option>
-                  <option value="kit_cavi">Kit cavi</option>
-                  <option value="consegna">Consegna</option>
-                </select>
-                <button id="todoPriorityBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
-                  Priorit&agrave;: OFF
-                </button>
-                <button id="todoSortBtn" class="ghost todo-toggle-btn" type="button" data-mode="off">
-                  Ordine numero: OFF
-                </button>
-                <button id="todoCompleteBtn" class="ghost todo-toggle-btn active" type="button">
-                  Complete: nascoste
-                </button>
-              </div>
-              <span id="todoInfoText" class="todo-sub">Click o long press su una pill per cambiare stato.</span>
-              <div id="todoHeaderTableHost" class="todo-header-table-host"></div>
+            <h2 id="calendarTitle">Calendario attivita</h2>
+            <div class="calendar-controls">
+              <button id="calPrevBtn" class="ghost" type="button"></button>
+              <input id="calendarDate" type="date" />
+              <button id="calNextBtn" class="ghost" type="button"></button>
+              <select id="calendarView">
+                <option value="week">Settimana</option>
+                <option value="day">Giorno</option>
+              </select>
             </div>
-            <div id="todoGrid" class="todo-grid"></div>
           </div>
+          <div id="calendarGrid" class="calendar-grid"></div>
         </section>
       </main>
+    </div>
+
+    <div id="notificationsModal" class="modal hidden">
+      <div class="modal-card notifications-modal-card">
+        <div class="modal-header">
+          <h3>Scadenze e notifiche</h3>
+          <div class="modal-header-actions">
+            <button id="notificationsOnlyMineBtn" class="ghost notifications-filter-btn" type="button" data-only-mine="false">
+              Solo le mie: OFF
+            </button>
+            <button id="refreshNotificationsBtn" class="ghost" type="button">Aggiorna</button>
+            <button id="closeNotificationsBtn" class="ghost" type="button">Chiudi</button>
+          </div>
+        </div>
+        <div id="notificationsSummary" class="notifications-summary">Nessuna notifica caricata.</div>
+        <div id="notificationsClassFilters" class="notifications-class-filters"></div>
+        <div id="notificationsList" class="notifications-list"></div>
+      </div>
     </div>
 
     <div id="importModal" class="modal hidden">
@@ -341,10 +414,30 @@
         </div>
         <p class="modal-hint">
           Incolla righe tab-separate da Excel. Formato richiesto:
-          <span class="mono">anno + numero + descrizione</span>.
+          <span class="mono">anno + numero + descrizione + tipo_macchina</span>.
+          Per unità speciali puoi scrivere <span class="mono">SPEC</span> nella stessa cella tipologia (es. <span class="mono">ELBA SPEC</span>) solo su NEVA, ELBA, LT-UNIT, YUKON.
         </p>
-        <textarea id="importTextarea" rows="10" placeholder="2025	418	Descrizione commessa"></textarea>
+        <div class="import-header-guide">
+          <div class="import-header-guide-top">
+            <div class="import-header-guide-label">Header da incollare (TAB separati)</div>
+            <button id="copyImportHeaderBtn" class="import-copy-icon-btn" type="button" aria-label="Copia header import base" title="Copia header">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="import-header-guide-row mono">anno	numero	descrizione	tipo_macchina</div>
+        </div>
+        <textarea id="importTextarea" rows="10" placeholder="2025	418	Descrizione commessa	ELBA"></textarea>
         <div id="importPreview" class="modal-preview">Nessun dato incollato.</div>
+        <div id="importProgressWrap" class="import-progress hidden" aria-live="polite">
+          <div class="import-progress-track">
+            <div id="importProgressBar" class="import-progress-bar"></div>
+          </div>
+          <div id="importProgressText" class="import-progress-text">0%</div>
+        </div>
+        <div id="importResult" class="import-result hidden"></div>
         <div class="modal-actions">
           <button id="importCommitBtn" class="primary" type="button">Importa</button>
         </div>
@@ -359,12 +452,25 @@
         </div>
         <p class="modal-hint">
           Incolla righe tab-separate da Excel. Formato richiesto:
-          <span class="mono">codice_commessa + ingresso_ordine + ordine_telaio_target + ordine_telaio_stimato + prelievo_materiali + ordinato (VERO/FALSO) + consegna_macchina</span>.
+          <span class="mono">codice_commessa + ingresso_ordine + ordine_telaio_target + ordine_telaio_stimato + prelievo_materiali + ordinato (VERO/FALSO) + ordine_telaio_effettivo + consegna_macchina</span>.
+          Se <span class="mono">ordinato=VERO</span>, <span class="mono">ordine_telaio_effettivo</span> e obbligatoria.
         </p>
+        <div class="import-header-guide">
+          <div class="import-header-guide-top">
+            <div class="import-header-guide-label">Header da incollare (TAB separati)</div>
+            <button id="copyImportDatesHeaderBtn" class="import-copy-icon-btn" type="button" aria-label="Copia header import date commesse" title="Copia header">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="import-header-guide-row mono">codice_commessa	ingresso_ordine	ordine_telaio_target	ordine_telaio_stimato	prelievo_materiali	ordinato	ordine_telaio_effettivo	consegna_macchina</div>
+        </div>
         <textarea
           id="importDatesTextarea"
           rows="10"
-          placeholder="2026_99	01/03/2026	15/03/2026	20/03/2026	25/03/2026	VERO	30/05/2026"
+          placeholder="2026_99	01/03/2026	15/03/2026	20/03/2026	25/03/2026	VERO	22/03/2026	30/05/2026"
         ></textarea>
         <div id="importDatesPreview" class="modal-preview">Nessun dato incollato.</div>
         <div class="modal-actions">
@@ -429,7 +535,7 @@
       <div class="modal-card">
         <div class="modal-header">
           <h3>Dettaglio commessa</h3>
-          <button id="closeDetailBtn" class="ghost" type="button">X close</button>
+          <button id="closeDetailBtn" class="ghost" type="button">Chiudi</button>
         </div>
         <div id="selectedCode" class="mono">Nessuna selezionata</div>
         <form id="detailForm" class="form">
@@ -451,6 +557,21 @@
                 Cliente
                 <input id="d_cliente" type="text" placeholder="Cliente" />
               </label>
+              <label>
+                Tipo macchina
+                <select id="d_tipo_macchina">
+                  <option value="">-</option>
+                  <option value="Altro tipo">Altro tipo</option>
+                </select>
+              </label>
+              <label>
+                Variante macchina
+                <select id="d_variante_macchina">
+                  <option value="standard">Standard</option>
+                  <option value="custom">Custom</option>
+                  <option value="altro">Altro</option>
+                </select>
+              </label>
             </div>
             <div id="d_numeroWarning" class="form-warning hidden"></div>
             <div class="detail-row detail-row-status">
@@ -459,7 +580,8 @@
                 <select id="d_stato">
                   <option value="nuova">Nuova</option>
                   <option value="in_corso">In corso</option>
-                  <option value="chiusa">Chiusa</option>
+                  <option value="rilasciata_produzione">Rilasciata a produzione</option>
+                  <option value="chiusa">Evasa</option>
                   <option value="sospesa">Sospesa</option>
                 </select>
               </label>
@@ -481,20 +603,33 @@
               </label>
               <div class="detail-telaio-group">
                 <div class="detail-telaio-group-title">Telaio</div>
-                <label>
-                  Ordine telaio target
-                  <input id="d_data_ordine_telaio" type="date" />
-                </label>
-                <label>
-                  Data telaio ordinato
-                  <input id="d_data_consegna_telaio_effettiva" type="date" />
-                </label>
-                <label class="form-toggle-field">
-                  Stato telaio
-                  <button id="d_telaio_ordinato" class="telaio-toggle" type="button" aria-pressed="false">
-                    Telaio da ordinare
-                  </button>
-                </label>
+                <div class="detail-telaio-cards">
+                  <div class="detail-telaio-card">
+                    <label>
+                      Data richiesta da produzione
+                      <input id="d_data_ordine_telaio" type="date" />
+                    </label>
+                    <label>
+                      Data pianificata da CAD
+                      <input id="d_data_conferma_consegna_telaio" type="date" />
+                    </label>
+                  </div>
+                  <div class="detail-telaio-card">
+                    <label class="form-toggle-field">
+                      Telaio ordinato
+                      <button id="d_telaio_ordinato" class="telaio-toggle" type="button" aria-pressed="false">
+                        Telaio da ordinare
+                      </button>
+                    </label>
+                    <label>
+                      Data ordine telaio effettiva
+                      <input id="d_data_consegna_telaio_effettiva" type="date" />
+                    </label>
+                  </div>
+                </div>
+                <div id="d_telaioPlannerWarning" class="form-warning hidden">
+                  Sei planner: in questa sezione non puoi salvare Data pianificata telaio, Stato telaio e Data ordine telaio effettiva.
+                </div>
               </div>
               <label>
                 Arrivo kit cavi
@@ -552,11 +687,27 @@
             <input id="n_cliente" type="text" placeholder="Cliente" />
           </label>
           <label>
+            Tipo macchina
+            <select id="n_tipo_macchina" required>
+              <option value="">Seleziona tipologia...</option>
+              <option value="Altro tipo">Altro tipo</option>
+            </select>
+          </label>
+          <label>
+            Variante macchina
+            <select id="n_variante_macchina" required>
+              <option value="standard">Standard</option>
+              <option value="custom">Custom</option>
+              <option value="altro">Altro</option>
+            </select>
+          </label>
+          <label>
             Stato
             <select id="n_stato">
               <option value="nuova">Nuova</option>
               <option value="in_corso">In corso</option>
-              <option value="chiusa">Chiusa</option>
+              <option value="rilasciata_produzione">Rilasciata a produzione</option>
+              <option value="chiusa">Evasa</option>
               <option value="sospesa">Sospesa</option>
             </select>
           </label>
@@ -583,7 +734,7 @@
             <span>Telaio ordinato</span>
           </label>
           <label>
-            Consegna telaio stimata
+            Data ordine telaio effettiva
             <input id="n_data_consegna_telaio_effettiva" type="date" />
           </label>
           <label>
@@ -645,6 +796,7 @@
         </select>
         <input id="matrixFilterNumero" class="hidden" type="number" min="0" step="1" placeholder="Numero commessa (esatto)" />
         <input id="matrixFilterSearch" type="text" placeholder="Cerca codice o descrizione..." />
+        <div id="matrixFilterSelectedPills" class="matrix-filter-selected hidden"></div>
         <div id="matrixFilterList" class="checks"></div>
       </div>
     </div>
@@ -701,7 +853,6 @@
                 </div>
                 <div class="activity-right">
                   <label id="activityAltroNoteWrap" class="activity-note">
-                    Note
                     <textarea id="activityAltroNote" rows="8" placeholder="Scrivi una nota..."></textarea>
                   </label>
                 </div>
@@ -869,6 +1020,18 @@
           Incolla righe tab-separate da Excel. Formato richiesto:
           <span class="mono">codice_commessa + ordine_telaio_target + prelievo_materiali + data_arrivo_kit_cavi + consegna_macchina</span>.
         </p>
+        <div class="import-header-guide">
+          <div class="import-header-guide-top">
+            <div class="import-header-guide-label">Header da incollare (TAB separati)</div>
+            <button id="copyImportProductionHeaderBtn" class="import-copy-icon-btn" type="button" aria-label="Copia header import produzione" title="Copia header">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="import-header-guide-row mono">codice_commessa	ordine_telaio_target	prelievo_materiali	data_arrivo_kit_cavi	consegna_macchina</div>
+        </div>
         <textarea
           id="importProductionTextarea"
           rows="10"
@@ -884,4 +1047,3 @@
     <script src="app.js"></script>
   </body>
 </html>
-

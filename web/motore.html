@@ -16,13 +16,17 @@
     <div class="app motore-app">
       <header class="topbar motore-topbar">
         <div class="brand">
-          <div class="logo">CL</div>
           <div>
             <div class="title">Motore Pianificazione</div>
             <div class="subtitle">No-code per regole e simulazioni</div>
           </div>
         </div>
         <div class="topbar-right">
+          <div class="motore-sandbox-box">
+            <span id="motoreSandboxState" class="motore-sandbox-state" aria-live="polite">Sandbox protetta</span>
+            <button id="motoreSandboxToggleBtn" class="ghost motore-sandbox-toggle" type="button">Passa a live</button>
+          </div>
+          <button id="motoreThemeToggleBtn" class="ghost" type="button" aria-label="Tema">Dark</button>
           <a class="ghost motore-link" href="index.html">Torna alla app</a>
         </div>
       </header>
@@ -47,12 +51,7 @@
           </div>
           <div class="motore-section">
             <div class="motore-section-title">Template attivita</div>
-            <div class="motore-tags">
-              <span class="tag cad">CAD</span>
-              <span class="tag thermo">Termodinamici</span>
-              <span class="tag elec">Elettrici</span>
-              <span class="tag">Documentazione</span>
-            </div>
+            <div id="motoreActivityCatalog" class="motore-catalog muted">Caricamento catalogo attivita...</div>
           </div>
         </section>
 
@@ -61,6 +60,7 @@
             <div>
               <h2 id="motoreRuleTitle">Regola: Elba</h2>
               <div class="motore-subtitle">Versione 1.0 - bozza</div>
+              <div id="motoreSandboxHint" class="motore-sandbox-hint">Sandbox attiva: simulazione protetta, nessuna scrittura su piano reale.</div>
             </div>
             <div class="motore-actions">
               <button class="ghost" type="button">Duplica</button>
@@ -70,10 +70,23 @@
 
           <div class="motore-grid">
             <div class="motore-block">
-              <div class="motore-block-title">Timeline logica</div>
-              <div id="motoreRuleList" class="motore-rule-list"></div>
-              <div id="motoreRuleWarnings" class="motore-rule-warnings hidden"></div>
-              <button class="ghost full" type="button">+ Aggiungi attivita</button>
+              <div class="motore-block-head-inline">
+                <div class="motore-block-title">Timeline logica</div>
+                <button id="motoreTimelineViewBtn" class="ghost" type="button">Vista confronto ore</button>
+              </div>
+              <div id="motoreTimelineDefaultView">
+                <div id="motoreRuleList" class="motore-rule-list"></div>
+                <div id="motoreRuleWarnings" class="motore-rule-warnings hidden"></div>
+                <button class="ghost full" type="button">+ Aggiungi attivita</button>
+              </div>
+              <div id="motoreTimelineCompareView" class="motore-compare hidden">
+                <div class="motore-subtitle">Confronto ore per attivita tra tipologie.</div>
+                <label class="motore-compare-filter">
+                  Attivita
+                  <input id="motoreCompareActivityFilter" type="text" placeholder="Es. 3D, Telaio, Preliminare..." />
+                </label>
+                <div id="motoreCompareTableWrap" class="motore-compare-table-wrap"></div>
+              </div>
             </div>
 
             <div class="motore-block">
@@ -97,20 +110,240 @@
               <div class="motore-fields">
                 <label>
                   Buffer standard (gg)
-                  <input type="number" value="2" />
+                  <input
+                    id="motoreParamBufferDays"
+                    type="number"
+                    value="2"
+                    title="Parametro di bozza: giorni di margine standard da aggiungere al piano. Al momento non viene ancora applicato dall'algoritmo."
+                  />
                 </label>
                 <label>
                   Priorita base
-                  <select>
+                  <select
+                    id="motoreParamBasePriority"
+                    title="Parametro di bozza: priorita generale della tipologia macchina. Al momento non viene ancora applicata dall'algoritmo."
+                  >
                     <option>Media</option>
                     <option>Alta</option>
                     <option>Critica</option>
                   </select>
                 </label>
                 <label class="toggle">
-                  <input type="checkbox" checked />
+                  <input
+                    id="motoreParamBlockOverlap"
+                    type="checkbox"
+                    checked
+                    title="Parametro di bozza: se attivo dovrebbe evitare sovrapposizioni nello stesso reparto. Al momento non viene ancora applicato dall'algoritmo."
+                  />
                   <span>Blocca sovrapposizioni reparto</span>
                 </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="motore-structure">
+            <div class="motore-structure-head">
+              <h3>Canvas responsabili</h3>
+              <div class="motore-subtitle">Struttura da compilare per guidare pianificazione e assegnazioni in matrice.</div>
+            </div>
+            <div class="motore-transfer-box">
+              <div class="motore-transfer-head">
+                <div class="motore-block-title">Trasferisci configurazione tra tipologie</div>
+                <div id="motoreTransferInfo" class="motore-subtitle">Seleziona sorgente e sezioni da copiare.</div>
+              </div>
+              <div class="motore-transfer-grid">
+                <label>
+                  Tipologia sorgente
+                  <select id="motoreTransferSource" title="Tipologia da cui copiare la configurazione."></select>
+                </label>
+                <div class="motore-transfer-sections">
+                  <label class="toggle">
+                    <input type="checkbox" data-transfer-section="timeline" checked />
+                    <span>Timeline logica</span>
+                  </label>
+                  <label class="toggle">
+                    <input type="checkbox" data-transfer-section="params" checked />
+                    <span>Parametri</span>
+                  </label>
+                  <label class="toggle">
+                    <input type="checkbox" data-transfer-section="priorities" checked />
+                    <span>Priorita backlog</span>
+                  </label>
+                  <label class="toggle">
+                    <input type="checkbox" data-transfer-section="flow" checked />
+                    <span>Dipendenze e flusso</span>
+                  </label>
+                  <label class="toggle">
+                    <input type="checkbox" data-transfer-section="skills" checked />
+                    <span>Skills e capacita</span>
+                  </label>
+                  <label class="toggle">
+                    <input type="checkbox" data-transfer-section="assignmentRules" checked />
+                    <span>Regole di assegnazione</span>
+                  </label>
+                </div>
+              </div>
+              <div class="motore-transfer-actions">
+                <button id="motoreTransferAllBtn" class="ghost" type="button">Tutto</button>
+                <button id="motoreTransferNoneBtn" class="ghost" type="button">Nessuno</button>
+                <button id="motoreTransferApplyBtn" class="primary" type="button">Copia nella tipologia corrente</button>
+              </div>
+            </div>
+            <div class="motore-structure-grid">
+              <div class="motore-block">
+                <div class="motore-block-title">1) Priorita backlog</div>
+                <div class="motore-fields motore-priority-fields">
+                  <label>
+                    Peso scadenza consegna
+                    <input
+                      id="motorePriorityDue"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value="40"
+                      title="Peso (0-100) della vicinanza alla data di consegna. Piu alto = priorita maggiore alle commesse vicine alla scadenza."
+                    />
+                  </label>
+                  <label>
+                    Peso ritardo accumulato
+                    <input
+                      id="motorePriorityDelay"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value="30"
+                      title="Peso (0-100) del ritardo gia accumulato. Piu alto = priorita maggiore alle commesse gia in ritardo."
+                    />
+                  </label>
+                  <label>
+                    Peso strategicita cliente
+                    <input
+                      id="motorePriorityStrategic"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value="20"
+                      title="Peso (0-100) dell'importanza strategica cliente/commessa."
+                    />
+                  </label>
+                  <label>
+                    Peso complessita macchina
+                    <input
+                      id="motorePriorityComplexity"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value="10"
+                      title="Peso (0-100) della complessita tecnica della macchina."
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div class="motore-block motore-block-span-2">
+                <div class="motore-block-title">2) Dipendenze e flusso attivita (per tipologia selezionata)</div>
+                <div class="motore-table-wrap">
+                  <table class="motore-table">
+                    <thead>
+                      <tr>
+                        <th title="Nome dell'attivita da pianificare per la tipologia selezionata.">Attivita</th>
+                        <th title="Attivita predecessore: la corrente parte dopo questa.">Dipende da</th>
+                        <th title="Hard: obbligatorio, Soft: preferito, None: nessun vincolo.">Vincolo</th>
+                        <th title="Se attivo, l'attivita puo procedere in parallelo ad altre attivita compatibili.">Parallelo</th>
+                        <th title="Eccezioni o note operative specifiche del flusso.">Note flusso</th>
+                      </tr>
+                    </thead>
+                    <tbody id="motoreFlowTableBody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="motore-block motore-block-span-2">
+                <div class="motore-block-title">3) Skill e capacita risorse (per tipologia selezionata)</div>
+                <div id="motoreSkillSummary" class="motore-subtitle">Caricamento risorse...</div>
+                <div class="motore-table-wrap">
+                  <table class="motore-table">
+                    <thead>
+                      <tr>
+                        <th title="Nome risorsa disponibile nel sistema.">Risorsa</th>
+                        <th title="Reparto di appartenenza della risorsa.">Reparto</th>
+                        <th title="Se attivo, la risorsa puo essere assegnata a questa tipologia.">Abilitata</th>
+                        <th title="Livello di competenza della risorsa sulla tipologia selezionata.">Livello</th>
+                        <th title="Selezione multipla delle attivita consentite, raggruppate per reparto.">Attivita consentite</th>
+                        <th title="Capacita massima giornaliera assegnabile su questa tipologia.">Max h/giorno</th>
+                      </tr>
+                    </thead>
+                    <tbody id="motoreSkillTableBody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="motore-block motore-block-span-2">
+                <div class="motore-block-title">4) Regole assegnazione</div>
+                <div class="motore-fields">
+                  <label class="toggle">
+                    <input
+                      id="motoreRuleHardSkills"
+                      type="checkbox"
+                      checked
+                      title="Se attivo, il motore non puo assegnare una risorsa senza skill adeguata."
+                    />
+                    <span>Blocca assegnazione se skill mancante (regola hard)</span>
+                  </label>
+                  <label class="toggle">
+                    <input
+                      id="motoreRulePreferContinuity"
+                      type="checkbox"
+                      checked
+                      title="Se attivo, il motore prova a mantenere la stessa risorsa sulla stessa commessa lungo le attivita."
+                    />
+                    <span>Preferisci continuita sulla stessa commessa</span>
+                  </label>
+                  <label class="toggle">
+                    <input
+                      id="motoreRuleBalanceLoad"
+                      type="checkbox"
+                      checked
+                      title="Se attivo, il motore distribuisce il carico su risorse equivalenti per evitare picchi."
+                    />
+                    <span>Bilancia carico tra risorse equivalenti</span>
+                  </label>
+                  <label>
+                    Note operative responsabile
+                    <textarea
+                      id="motorePlannerNotes"
+                      rows="3"
+                      placeholder="Eccezioni, vincoli manuali, casi particolari..."
+                      title="Note libere di contesto per il planner: eccezioni, vincoli temporanei, criteri manuali."
+                    ></textarea>
+                  </label>
+                </div>
+              </div>
+
+              <div class="motore-block motore-block-span-2">
+                <div class="motore-block-title">5) Controllo coerenza</div>
+                <div id="motoreValidationSummary" class="motore-subtitle motore-validation-summary">Analisi in corso...</div>
+                <div id="motoreValidationList" class="motore-validation-list"></div>
+              </div>
+
+              <div class="motore-block motore-block-span-2">
+                <div class="motore-block-title">6) Sinottico tipologia</div>
+                <div class="motore-subtitle">Vista live di flussi e copertura risorse per la tipologia selezionata.</div>
+                <div id="motoreSynopticMeta" class="motore-synoptic-meta"></div>
+                <div class="motore-synoptic-grid">
+                  <div class="motore-synoptic-panel">
+                    <div class="motore-synoptic-title">Copertura risorse</div>
+                    <div id="motoreSynopticResources" class="motore-synoptic-resources"></div>
+                  </div>
+                  <div class="motore-synoptic-panel">
+                    <div class="motore-synoptic-title">Flusso attivita</div>
+                    <div id="motoreSynopticFlow" class="motore-synoptic-flow"></div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -119,43 +352,74 @@
         <section class="motore-panel motore-sim">
           <div class="motore-panel-header">
             <h2>Simulazione</h2>
-            <button class="ghost" type="button">Reset</button>
+            <button id="motoreSimResetBtn" class="ghost" type="button">Reset</button>
           </div>
           <div class="motore-block">
             <div class="motore-block-title">Input rapido</div>
             <div class="motore-fields">
               <label>
                 Commessa
-                <input type="text" placeholder="2026_099" />
+                <input
+                  id="motoreSimOrderCode"
+                  type="text"
+                  placeholder="2026_099"
+                  title="Codice commessa usato nella simulazione del piano."
+                />
               </label>
               <label>
                 Tipo macchina
-                <select id="motoreMachineSelect"></select>
+                <select
+                  id="motoreMachineSelect"
+                  title="Tipologia/variante macchina su cui applicare la simulazione."
+                ></select>
               </label>
               <label>
                 Ordine telaio
-                <input type="date" />
+                <input
+                  id="motoreSimFrameOrderDate"
+                  type="date"
+                  title="Data target o effettiva dell'ordine telaio considerata nella simulazione."
+                />
               </label>
               <label>
                 Consegna macchina
-                <input type="date" />
+                <input
+                  id="motoreSimDeliveryDate"
+                  type="date"
+                  title="Data richiesta di consegna macchina da rispettare in pianificazione."
+                />
               </label>
             </div>
-            <button class="primary full" type="button">Simula piano</button>
+            <button id="motoreSimRunBtn" class="primary full" type="button">Esegui simulazione</button>
+            <div id="motoreSimMeta" class="motore-hint muted">
+              Simulazione protetta: usa backlog reale in sola lettura e non scrive su matrice.
+            </div>
           </div>
 
           <div class="motore-block">
             <div class="motore-block-title">Output</div>
             <div id="motoreOutput" class="motore-output">
-              <div class="motore-output-item ok">Timeline coerente con i vincoli.</div>
-              <div class="motore-output-item warn">CAD ha un picco di carico.</div>
-              <div class="motore-output-item warn">Termodinamici in overlapping.</div>
+              <div id="motoreSimKpis" class="motore-sim-kpis">
+                <div class="motore-output-item">KPI disponibili dopo la prima simulazione.</div>
+              </div>
+              <div>
+                <div class="motore-sim-subtitle">Piano proposto per risorsa/settimana</div>
+                <div id="motoreSimPlanList" class="motore-sim-list">
+                  <div class="motore-output-item">Nessuna simulazione eseguita.</div>
+                </div>
+              </div>
+              <div>
+                <div class="motore-sim-subtitle">Conflitti e blocchi</div>
+                <div id="motoreSimIssues" class="motore-sim-list">
+                  <div class="motore-output-item">Nessun blocco analizzato.</div>
+                </div>
+              </div>
             </div>
           </div>
 
           <div class="motore-block">
             <div class="motore-block-title">Azioni</div>
-            <button class="primary full" type="button" disabled>Applica al piano</button>
+            <button id="motoreSimApplyBtn" class="primary full" type="button" disabled>Applica al piano</button>
             <div class="motore-hint muted">
               Attiva l'applicazione solo dopo la validazione del responsabile.
             </div>

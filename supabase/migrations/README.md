@@ -16,3 +16,7 @@ Quando aggiungi una nuova migrazione, aggiungi qui una riga con la descrizione i
 | `20260311121000_update_v_commesse_add_kit_cavi.sql` | Aggiorna la vista `v_commesse` per includere `data_arrivo_kit_cavi`. |
 | `20260311133000_update_planner_rpc_add_prelievo.sql` | Estende la funzione planner per aggiornare anche la data prelievo materiali. |
 | `20260313103000_add_commessa_imponibili_reports.sql` | Crea la tabella dedicata agli imponibili per report (`commessa_imponibili`) con RLS solo admin e trigger `updated_at`. |
+| `20260314110000_add_motore_canvas_tables.sql` | Aggiunge/normalizza le tabelle Motore e introduce il canvas responsabili (`motore_canvas_config/flow/skill`) con RLS admin e seed iniziale tipologie/varianti. |
+| `20260314153000_add_machine_type_to_commesse.sql` | Aggiunge su `commesse` i campi obbligatori `tipo_macchina` e `variante_macchina`, aggiorna `v_commesse` e apre la lettura di `motore_tipologie` a tutti gli utenti whitelisted. |
+| `20260314164000_add_rilasciata_produzione_status.sql` | Estende l’enum `commessa_stato` con `rilasciata_produzione` per gestire lo stato “Rilasciata a produzione”. |
+| `20260314173000_mark_2025_delivered_commesse_as_evasa.sql` | Allinea lo storico: imposta `stato = chiusa` (UI: “Evasa”) per tutte le commesse con `data_consegna_macchina` nel 2025. |
